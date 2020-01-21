@@ -12,6 +12,8 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.Assert;
 import org.junit.Assume;
@@ -28,6 +30,57 @@ import org.redisson.client.protocol.ScoredEntry;
 
 public class RedissonScoredSortedSetTest extends BaseTest {
 
+    @Test
+    public void testTakeFirst() {
+        final RScoredSortedSet<Integer> queue1 = redisson.getScoredSortedSet("queue:pollany");
+        Executors.newSingleThreadScheduledExecutor().schedule(() -> {
+            RScoredSortedSet<Integer> queue2 = redisson.getScoredSortedSet("queue:pollany1");
+            RScoredSortedSet<Integer> queue3 = redisson.getScoredSortedSet("queue:pollany2");
+            queue1.add(0.1, 1);
+        }, 3, TimeUnit.SECONDS);
+
+        long s = System.currentTimeMillis();
+        int l = queue1.takeFirst();
+        Assert.assertEquals(1, l);
+        Assert.assertTrue(System.currentTimeMillis() - s > 2000);
+    }
+    
+    @Test
+    public void testPollFirstFromAny() throws InterruptedException {
+        final RScoredSortedSet<Integer> queue1 = redisson.getScoredSortedSet("queue:pollany");
+        Executors.newSingleThreadScheduledExecutor().schedule(() -> {
+            RScoredSortedSet<Integer> queue2 = redisson.getScoredSortedSet("queue:pollany1");
+            RScoredSortedSet<Integer> queue3 = redisson.getScoredSortedSet("queue:pollany2");
+            queue3.add(0.1, 2);
+            queue1.add(0.1, 1);
+            queue2.add(0.1, 3);
+        }, 3, TimeUnit.SECONDS);
+
+        long s = System.currentTimeMillis();
+        int l = queue1.pollFirstFromAny(4, TimeUnit.SECONDS, "queue:pollany1", "queue:pollany2");
+
+        Assert.assertEquals(2, l);
+        Assert.assertTrue(System.currentTimeMillis() - s > 2000);
+    }
+
+    @Test
+    public void testPollLastFromAny() throws InterruptedException {
+        final RScoredSortedSet<Integer> queue1 = redisson.getScoredSortedSet("queue:pollany");
+        Executors.newSingleThreadScheduledExecutor().schedule(() -> {
+            RScoredSortedSet<Integer> queue2 = redisson.getScoredSortedSet("queue:pollany1");
+            RScoredSortedSet<Integer> queue3 = redisson.getScoredSortedSet("queue:pollany2");
+            queue3.add(0.1, 2);
+            queue1.add(0.1, 1);
+            queue2.add(0.1, 3);
+        }, 3, TimeUnit.SECONDS);
+
+        long s = System.currentTimeMillis();
+        int l = queue1.pollLastFromAny(4, TimeUnit.SECONDS, "queue:pollany1", "queue:pollany2");
+
+        Assert.assertEquals(2, l);
+        Assert.assertTrue(System.currentTimeMillis() - s > 2000);
+    }
+    
     @Test
     public void testSortOrder() {
         RScoredSortedSet<Integer> set = redisson.getScoredSortedSet("list", IntegerCodec.INSTANCE);
@@ -135,7 +188,121 @@ public class RedissonScoredSortedSetTest extends BaseTest {
         Collection<String> ascSort = set.readSort("test*", Arrays.asList("tester*"), SortOrder.ASC, 1, 2);
         assertThat(ascSort).containsExactly("obj2", "obj3");
     }
-    
+
+    @Test
+    public void testSortOrderAlpha(){
+        RScoredSortedSet<String> set = redisson.getScoredSortedSet("list", StringCodec.INSTANCE);
+        set.add(10,"1");
+        set.add(9,"3");
+        set.add(8,"12");
+
+        assertThat(set.readSortAlpha(SortOrder.ASC))
+                .containsExactly("1", "12", "3");
+        assertThat(set.readSortAlpha(SortOrder.DESC))
+                .containsExactly("3", "12", "1");
+    }
+
+    @Test
+    public void testSortOrderLimitAlpha(){
+        RScoredSortedSet<String> set = redisson.getScoredSortedSet("list", StringCodec.INSTANCE);
+        set.add(10,"1");
+        set.add(9,"3");
+        set.add(8,"12");
+
+        assertThat(set.readSortAlpha(SortOrder.DESC, 0, 2))
+                .containsExactly("3", "12");
+        assertThat(set.readSortAlpha(SortOrder.DESC, 1, 2))
+                .containsExactly("12", "1");
+    }
+
+    @Test
+    public void testSortOrderByPatternAlpha(){
+        RScoredSortedSet<Integer> set = redisson.getScoredSortedSet("list", IntegerCodec.INSTANCE);
+        set.add(10,1);
+        set.add(9,2);
+        set.add(8,3);
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        Collection<Integer> descSort = set
+                .readSortAlpha("test*", SortOrder.DESC);
+        assertThat(descSort).containsExactly(2, 1, 3);
+
+        Collection<Integer> ascSort = set
+                .readSortAlpha("test*", SortOrder.ASC);
+        assertThat(ascSort).containsExactly(3, 1, 2);
+    }
+
+    @Test
+    public void testSortOrderByPatternAlphaLimit(){
+        RScoredSortedSet<Integer> set = redisson.getScoredSortedSet("list", IntegerCodec.INSTANCE);
+        set.add(10,1);
+        set.add(9, 2);
+        set.add(8, 3);
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        Collection<Integer> descSort = set
+                .readSortAlpha("test*", SortOrder.DESC,1,2);
+        assertThat(descSort).containsExactly(1, 3);
+
+        Collection<Integer> ascSort = set
+                .readSortAlpha("test*", SortOrder.ASC,1,2);
+        assertThat(ascSort).containsExactly(1, 2);
+    }
+
+    @Test
+    public void testSortOrderByPatternGetAlpha() {
+        RScoredSortedSet<Integer> set = redisson.getScoredSortedSet("list", StringCodec.INSTANCE);
+        set.add(10,1);
+        set.add(9, 2);
+        set.add(8, 3);
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        redisson.getBucket("tester1", StringCodec.INSTANCE).set("obj1");
+        redisson.getBucket("tester2", StringCodec.INSTANCE).set("obj2");
+        redisson.getBucket("tester3", StringCodec.INSTANCE).set("obj3");
+
+        Collection<String> descSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.DESC);
+        assertThat(descSort).containsExactly("obj2", "obj1", "obj3");
+
+        Collection<String> ascSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.ASC);
+        assertThat(ascSort).containsExactly("obj3", "obj1", "obj2");
+    }
+
+    @Test
+    public void testSortOrderByPatternGetAlphaLimit() {
+        RScoredSortedSet<Integer> set = redisson.getScoredSortedSet("list", StringCodec.INSTANCE);
+        set.add(10,1);
+        set.add(9, 2);
+        set.add(8, 3);
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        redisson.getBucket("tester1", StringCodec.INSTANCE).set("obj1");
+        redisson.getBucket("tester2", StringCodec.INSTANCE).set("obj2");
+        redisson.getBucket("tester3", StringCodec.INSTANCE).set("obj3");
+
+        Collection<String> descSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.DESC,1,2);
+        assertThat(descSort).containsExactly("obj1", "obj3");
+
+        Collection<String> ascSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.ASC,1, 2);
+        assertThat(ascSort).containsExactly("obj1", "obj2");
+    }
+
     @Test
     public void testSortTo() {
         RScoredSortedSet<Integer> set = redisson.getScoredSortedSet("list", IntegerCodec.INSTANCE);
@@ -249,7 +416,59 @@ public class RedissonScoredSortedSetTest extends BaseTest {
         Assert.assertEquals("c", set.pollLast());
         assertThat(set).containsExactly("a", "b");
     }
+    
+    @Test
+    public void testPollLastAmount() {
+        RScoredSortedSet<String> set = redisson.getScoredSortedSet("simple");
+        assertThat(set.pollLast(2)).isEmpty();
 
+        set.add(0.1, "a");
+        set.add(0.2, "b");
+        set.add(0.3, "c");
+
+        assertThat(set.pollLast(2)).containsExactly("b", "c");
+        assertThat(set).containsExactly("a");
+    }
+    
+    @Test
+    public void testPollLastTimeout() {
+        RScoredSortedSet<String> set = redisson.getScoredSortedSet("simple");
+        assertThat(set.pollLast(1, TimeUnit.SECONDS)).isNull();
+
+        set.add(0.1, "a");
+        set.add(0.2, "b");
+        set.add(0.3, "c");
+
+        assertThat(set.pollLast(1, TimeUnit.SECONDS)).isEqualTo("c");
+        assertThat(set).containsExactly("a", "b");
+    }
+
+    @Test
+    public void testPollFirstTimeout() {
+        RScoredSortedSet<String> set = redisson.getScoredSortedSet("simple");
+        assertThat(set.pollFirst(1, TimeUnit.SECONDS)).isNull();
+
+        set.add(0.1, "a");
+        set.add(0.2, "b");
+        set.add(0.3, "c");
+
+        assertThat(set.pollFirst(1, TimeUnit.SECONDS)).isEqualTo("a");
+        assertThat(set).containsExactly("b", "c");
+    }
+    
+    @Test
+    public void testPollFistAmount() {
+        RScoredSortedSet<String> set = redisson.getScoredSortedSet("simple");
+        assertThat(set.pollFirst(2)).isEmpty();
+
+        set.add(0.1, "a");
+        set.add(0.2, "b");
+        set.add(0.3, "c");
+
+        assertThat(set.pollFirst(2)).containsExactly("a", "b");
+        assertThat(set).containsExactly("c");
+    }
+    
     @Test
     public void testPollFirst() {
         RScoredSortedSet<String> set = redisson.getScoredSortedSet("simple");
@@ -271,6 +490,9 @@ public class RedissonScoredSortedSetTest extends BaseTest {
         set.add(0.3, "c");
         set.add(0.4, "d");
 
+        RScoredSortedSet<String> set2 = redisson.getScoredSortedSet("simple2");
+        assertThat(set2.first()).isNull();
+        assertThat(set2.last()).isNull();
         Assert.assertEquals("a", set.first());
         Assert.assertEquals("d", set.last());
     }
@@ -283,6 +505,9 @@ public class RedissonScoredSortedSetTest extends BaseTest {
         set.add(0.3, "c");
         set.add(0.4, "d");
 
+        RScoredSortedSet<String> set2 = redisson.getScoredSortedSet("simple2");
+        assertThat(set2.firstScore()).isNull();
+        assertThat(set2.lastScore()).isNull();
         assertThat(set.firstScore()).isEqualTo(0.1);
         assertThat(set.lastScore()).isEqualTo(0.4);
     }

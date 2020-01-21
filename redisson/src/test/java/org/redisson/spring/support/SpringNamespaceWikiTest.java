@@ -19,7 +19,6 @@ import org.redisson.client.RedisClient;
 import org.redisson.client.RedisConnection;
 import org.redisson.client.codec.Codec;
 import org.redisson.client.protocol.RedisCommands;
-import org.redisson.codec.ReferenceCodecProvider;
 import org.redisson.config.Config;
 import org.redisson.config.SingleServerConfig;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -121,9 +120,7 @@ public class SpringNamespaceWikiTest {
             assertEquals(1, config.getThreads());
             assertEquals(2, config.getNettyThreads());
             assertSame(context.getBean("myCodec", Codec.class), config.getCodec());
-            assertEquals(false, config.isUseLinuxNativeEpoll());
             assertEquals(false, config.isReferenceEnabled());
-            assertSame(context.getBean("myCodecProvider", ReferenceCodecProvider.class), config.getReferenceCodecProvider());
             assertSame(context.getBean("myExecutor", Executor.class), config.getExecutor());
             assertSame(context.getBean("myEventLoopGroup", EventLoopGroup.class), config.getEventLoopGroup());
             Method method = Config.class.getDeclaredMethod("getSingleServerConfig", (Class<?>[]) null);
@@ -135,8 +132,6 @@ public class SpringNamespaceWikiTest {
             assertEquals(40000, single.getTimeout());
             assertEquals(5, single.getRetryAttempts());
             assertEquals(60000, single.getRetryInterval());
-            assertEquals(70000, single.getReconnectionTimeout());
-            assertEquals(8, single.getFailedAttempts());
             assertEquals("do_not_use_if_it_is_not_set", single.getPassword());
             assertEquals(10, single.getSubscriptionsPerConnection());
             assertEquals("client_name", single.getClientName());
@@ -145,7 +140,6 @@ public class SpringNamespaceWikiTest {
             assertEquals(13, single.getConnectionMinimumIdleSize());
             assertEquals(14, single.getConnectionPoolSize());
             assertEquals(15, single.getDatabase());
-            assertEquals(false, single.isDnsMonitoring());
             assertEquals(80000, single.getDnsMonitoringInterval());
             ((ConfigurableApplicationContext) context).close();
         } finally {

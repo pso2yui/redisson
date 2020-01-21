@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,23 +15,6 @@
  */
 package org.redisson;
 
-import static org.redisson.client.protocol.RedisCommands.EVAL_OBJECT;
-import static org.redisson.client.protocol.RedisCommands.LINDEX;
-import static org.redisson.client.protocol.RedisCommands.LLEN_INT;
-import static org.redisson.client.protocol.RedisCommands.LPOP;
-import static org.redisson.client.protocol.RedisCommands.LPUSH_BOOLEAN;
-import static org.redisson.client.protocol.RedisCommands.LRANGE;
-import static org.redisson.client.protocol.RedisCommands.LREM_SINGLE;
-import static org.redisson.client.protocol.RedisCommands.RPUSH_BOOLEAN;
-
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-import java.util.ListIterator;
-import java.util.NoSuchElementException;
-
 import org.redisson.api.RFuture;
 import org.redisson.api.RList;
 import org.redisson.api.RedissonClient;
@@ -45,12 +28,14 @@ import org.redisson.client.protocol.convertor.BooleanNumberReplayConvertor;
 import org.redisson.client.protocol.convertor.Convertor;
 import org.redisson.client.protocol.convertor.IntegerReplayConvertor;
 import org.redisson.command.CommandAsyncExecutor;
+import org.redisson.iterator.RedissonListIterator;
 import org.redisson.mapreduce.RedissonCollectionMapReduce;
 import org.redisson.misc.RPromise;
 import org.redisson.misc.RedissonPromise;
 
-import io.netty.util.concurrent.Future;
-import io.netty.util.concurrent.FutureListener;
+import java.util.*;
+
+import static org.redisson.client.protocol.RedisCommands.*;
 
 /**
  * Distributed and concurrent implementation of {@link java.util.List}
@@ -148,18 +133,20 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
         return removeAsync(o, 1);
     }
 
-    protected RFuture<Boolean> removeAsync(Object o, int count) {
+    @Override
+    public RFuture<Boolean> removeAsync(Object o, int count) {
         return commandExecutor.writeAsync(getName(), codec, LREM_SINGLE, getName(), count, encode(o));
     }
 
-    protected boolean remove(Object o, int count) {
+    @Override
+    public boolean remove(Object o, int count) {
         return get(removeAsync(o, count));
     }
 
     @Override
     public RFuture<Boolean> containsAllAsync(Collection<?> c) {
         if (c.isEmpty()) {
-            return newSucceededFuture(true);
+            return RedissonPromise.newSucceededFuture(true);
         }
 
         return commandExecutor.evalReadAsync(getName(), codec, RedisCommands.EVAL_BOOLEAN,
@@ -186,9 +173,9 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
     }
 
     @Override
-    public RFuture<Boolean> addAllAsync(final Collection<? extends V> c) {
+    public RFuture<Boolean> addAllAsync(Collection<? extends V> c) {
         if (c.isEmpty()) {
-            return newSucceededFuture(false);
+            return RedissonPromise.newSucceededFuture(false);
         }
 
         List<Object> args = new ArrayList<Object>(c.size() + 1);
@@ -204,7 +191,7 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
         }
 
         if (coll.isEmpty()) {
-            return newSucceededFuture(false);
+            return RedissonPromise.newSucceededFuture(false);
         }
 
         if (index == 0) { // prepend elements to list
@@ -246,7 +233,7 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
     @Override
     public RFuture<Boolean> removeAllAsync(Collection<?> c) {
         if (c.isEmpty()) {
-            return newSucceededFuture(false);
+            return RedissonPromise.newSucceededFuture(false);
         }
 
         return commandExecutor.evalWriteAsync(getName(), codec, RedisCommands.EVAL_BOOLEAN,
@@ -309,11 +296,11 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
         return commandExecutor.readAsync(getName(), codec, LINDEX, getName(), index);
     }
     
-    public List<V> get(int ...indexes) {
+    public List<V> get(int...indexes) {
         return get(getAsync(indexes));
     }
     
-    public RFuture<List<V>> getAsync(int ...indexes) {
+    public RFuture<List<V>> getAsync(int...indexes) {
         List<Integer> params = new ArrayList<Integer>();
         for (Integer index : indexes) {
             params.add(index);
@@ -344,7 +331,7 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
             return get(setAsync(index, element));
         } catch (RedisException e) {
             if (e.getCause() instanceof IndexOutOfBoundsException) {
-                throw (IndexOutOfBoundsException)e.getCause();
+                throw (IndexOutOfBoundsException) e.getCause();
             }
             throw e;
         }
@@ -352,27 +339,23 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
 
     @Override
     public RFuture<V> setAsync(int index, V element) {
-        final RPromise<V> result = new RedissonPromise<V>();
+        RPromise<V> result = new RedissonPromise<V>();
         RFuture<V> future = commandExecutor.evalWriteAsync(getName(), codec, RedisCommands.EVAL_OBJECT,
                 "local v = redis.call('lindex', KEYS[1], ARGV[1]); " +
                         "redis.call('lset', KEYS[1], ARGV[1], ARGV[2]); " +
                         "return v",
                 Collections.<Object>singletonList(getName()), index, encode(element));
-        future.addListener(new FutureListener<V>() {
-
-            @Override
-            public void operationComplete(Future<V> future) throws Exception {
-                if (!future.isSuccess()) {
-                    if (future.cause().getMessage().contains("ERR index out of range")) {
-                        result.tryFailure(new IndexOutOfBoundsException("index out of range"));
-                        return;
-                    }
-                    result.tryFailure(future.cause());
+        future.onComplete((res, e) -> {
+            if (e != null) {
+                if (e.getMessage().contains("ERR index out of range")) {
+                    result.tryFailure(new IndexOutOfBoundsException("index out of range"));
                     return;
                 }
-                
-                result.trySuccess(future.getNow());
+                result.tryFailure(e);
+                return;
             }
+            
+            result.trySuccess(res);
         });
         return result;
     }
@@ -391,17 +374,19 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
     public void add(int index, V element) {
         addAll(index, Collections.singleton(element));
     }
-
+    
+    @Override
+    public RFuture<Boolean> addAsync(int index, V element) {
+        return addAllAsync(index, Collections.singleton(element));
+    }
+    
     @Override
     public V remove(int index) {
-        return remove((long) index);
-    }
-
-    public V remove(long index) {
         return get(removeAsync(index));
     }
     
-    public RFuture<V> removeAsync(long index) {
+    @Override
+    public RFuture<V> removeAsync(int index) {
         if (index == 0) {
             return commandExecutor.writeAsync(getName(), codec, LPOP, getName());
         }
@@ -421,7 +406,7 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
     }
     
     @Override
-    public RFuture<Void> fastRemoveAsync(long index) {
+    public RFuture<Void> fastRemoveAsync(int index) {
         return commandExecutor.evalWriteAsync(getName(), codec, RedisCommands.EVAL_VOID,
                 "redis.call('lset', KEYS[1], ARGV[1], 'DELETED_BY_REDISSON');" +
                 "redis.call('lrem', KEYS[1], 1, 'DELETED_BY_REDISSON');",
@@ -507,98 +492,27 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
     }
 
     @Override
-    public ListIterator<V> listIterator(final int ind) {
-        return new ListIterator<V>() {
-
-            private V prevCurrentValue;
-            private V nextCurrentValue;
-            private V currentValueHasRead;
-            private int currentIndex = ind - 1;
-            private boolean hasBeenModified = true;
+    public ListIterator<V> listIterator(int ind) {
+        return new RedissonListIterator<V>(ind) {
 
             @Override
-            public boolean hasNext() {
-                V val = RedissonList.this.getValue(currentIndex+1);
-                if (val != null) {
-                    nextCurrentValue = val;
-                }
-                return val != null;
+            public V getValue(int index) {
+                return RedissonList.this.getValue(index);
             }
 
             @Override
-            public V next() {
-                if (nextCurrentValue == null && !hasNext()) {
-                    throw new NoSuchElementException("No such element at index " + currentIndex);
-                }
-                currentIndex++;
-                currentValueHasRead = nextCurrentValue;
-                nextCurrentValue = null;
-                hasBeenModified = false;
-                return currentValueHasRead;
+            public V remove(int index) {
+                return RedissonList.this.remove(index);
             }
 
             @Override
-            public void remove() {
-                if (currentValueHasRead == null) {
-                    throw new IllegalStateException("Neither next nor previous have been called");
-                }
-                if (hasBeenModified) {
-                    throw new IllegalStateException("Element been already deleted");
-                }
-                RedissonList.this.remove(currentIndex);
-                currentIndex--;
-                hasBeenModified = true;
-                currentValueHasRead = null;
+            public void fastSet(int index, V value) {
+                RedissonList.this.fastSet(index, value);
             }
 
             @Override
-            public boolean hasPrevious() {
-                if (currentIndex < 0) {
-                    return false;
-                }
-                V val = RedissonList.this.getValue(currentIndex);
-                if (val != null) {
-                    prevCurrentValue = val;
-                }
-                return val != null;
-            }
-
-            @Override
-            public V previous() {
-                if (prevCurrentValue == null && !hasPrevious()) {
-                    throw new NoSuchElementException("No such element at index " + currentIndex);
-                }
-                currentIndex--;
-                hasBeenModified = false;
-                currentValueHasRead = prevCurrentValue;
-                prevCurrentValue = null;
-                return currentValueHasRead;
-            }
-
-            @Override
-            public int nextIndex() {
-                return currentIndex + 1;
-            }
-
-            @Override
-            public int previousIndex() {
-                return currentIndex;
-            }
-
-            @Override
-            public void set(V e) {
-                if (hasBeenModified) {
-                    throw new IllegalStateException();
-                }
-
-                RedissonList.this.fastSet(currentIndex, e);
-            }
-
-            @Override
-            public void add(V e) {
-                RedissonList.this.add(currentIndex+1, e);
-                currentIndex++;
-                hasBeenModified = true;
+            public void add(int index, V value) {
+                RedissonList.this.add(index, value);
             }
         };
     }
@@ -616,6 +530,8 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
         return new RedissonSubList<V>(codec, commandExecutor, getName(), fromIndex, toIndex);
     }
 
+    @Override
+    @SuppressWarnings("AvoidInlineConditionals")
     public String toString() {
         Iterator<V> it = iterator();
         if (! it.hasNext())
@@ -633,6 +549,7 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
     }
 
     @Override
+    @SuppressWarnings("AvoidInlineConditionals")
     public boolean equals(Object o) {
         if (o == this)
             return true;
@@ -651,6 +568,7 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
     }
 
     @Override
+    @SuppressWarnings("AvoidInlineConditionals")
     public int hashCode() {
         int hashCode = 1;
         for (V e : this) {
@@ -721,45 +639,84 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
 
     @Override
     public <T> Collection<T> readSort(String byPattern, List<String> getPatterns, SortOrder order) {
-        return (Collection<T>)get(readSortAsync(byPattern, getPatterns, order));
+        return (Collection<T>) get(readSortAsync(byPattern, getPatterns, order));
     }
     
     @Override
     public <T> RFuture<Collection<T>> readSortAsync(String byPattern, List<String> getPatterns, SortOrder order) {
         return readSortAsync(byPattern, getPatterns, order, -1, -1);
     }
-    
+
     @Override
     public <T> Collection<T> readSort(String byPattern, List<String> getPatterns, SortOrder order, int offset, int count) {
-        return (Collection<T>)get(readSortAsync(byPattern, getPatterns, order, offset, count));
+        return (Collection<T>) get(readSortAsync(byPattern, getPatterns, order, offset, count));
     }
 
     @Override
     public <T> RFuture<Collection<T>> readSortAsync(String byPattern, List<String> getPatterns, SortOrder order, int offset, int count) {
-        List<Object> params = new ArrayList<Object>();
-        params.add(getName());
-        if (byPattern != null) {
-            params.add("BY");
-            params.add(byPattern);
-        }
-        if (offset != -1 && count != -1) {
-            params.add("LIMIT");
-        }
-        if (offset != -1) {
-            params.add(offset);
-        }
-        if (count != -1) {
-            params.add(count);
-        }
-        for (String pattern : getPatterns) {
-            params.add("GET");
-            params.add(pattern);
-        }
-        params.add(order);
-        
-        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_LIST, params.toArray());
+        return readSortAsync(byPattern, getPatterns, order, offset, count, false);
     }
-    
+
+    @Override
+    public List<V> readSortAlpha(SortOrder order) {
+        return get(readSortAlphaAsync(order));
+    }
+
+    @Override
+    public RFuture<List<V>> readSortAlphaAsync(SortOrder order) {
+        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_LIST, getName(), "ALPHA", order);
+    }
+
+    @Override
+    public List<V> readSortAlpha(SortOrder order, int offset, int count) {
+        return get(readSortAlphaAsync(order, offset, count));
+    }
+
+    @Override
+    public RFuture<List<V>> readSortAlphaAsync(SortOrder order, int offset, int count) {
+        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_LIST, getName(), "LIMIT", offset, count, "ALPHA", order);
+    }
+
+    @Override
+    public List<V> readSortAlpha(String byPattern, SortOrder order) {
+        return get(readSortAlphaAsync(byPattern, order));
+    }
+
+    @Override
+    public RFuture<List<V>> readSortAlphaAsync(String byPattern, SortOrder order) {
+        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_LIST, getName(), "BY", byPattern, "ALPHA", order);
+    }
+
+    @Override
+    public List<V> readSortAlpha(String byPattern, SortOrder order, int offset, int count) {
+        return get(readSortAlphaAsync(byPattern, order, offset, count));
+    }
+
+    @Override
+    public RFuture<List<V>> readSortAlphaAsync(String byPattern, SortOrder order, int offset, int count) {
+        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_LIST, getName(), "BY", byPattern, "LIMIT", offset, count, "ALPHA", order);
+    }
+
+    @Override
+    public <T> Collection<T> readSortAlpha(String byPattern, List<String> getPatterns, SortOrder order) {
+        return (Collection<T>) get(readSortAlphaAsync(byPattern, getPatterns, order));
+    }
+
+    @Override
+    public <T> RFuture<Collection<T>> readSortAlphaAsync(String byPattern, List<String> getPatterns, SortOrder order) {
+        return readSortAlphaAsync(byPattern, getPatterns, order, -1, -1);
+    }
+
+    @Override
+    public <T> Collection<T> readSortAlpha(String byPattern, List<String> getPatterns, SortOrder order, int offset, int count) {
+        return (Collection<T>) get(readSortAlphaAsync(byPattern, getPatterns, order, offset, count));
+    }
+
+    @Override
+    public <T> RFuture<Collection<T>> readSortAlphaAsync(String byPattern, List<String> getPatterns, SortOrder order, int offset, int count) {
+        return readSortAsync(byPattern, getPatterns, order, offset, count, true);
+    }
+
     @Override
     public int sortTo(String destName, SortOrder order) {
         return get(sortToAsync(destName, order));
@@ -841,6 +798,58 @@ public class RedissonList<V> extends RedissonExpirable implements RList<V> {
         params.add(destName);
         
         return commandExecutor.writeAsync(getName(), codec, RedisCommands.SORT_TO, params.toArray());
+    }
+
+    private <T> RFuture<Collection<T>> readSortAsync(String byPattern, List<String> getPatterns, SortOrder order, int offset, int count, boolean alpha) {
+        List<Object> params = new ArrayList<Object>();
+        params.add(getName());
+        if (byPattern != null) {
+            params.add("BY");
+            params.add(byPattern);
+        }
+        if (offset != -1 && count != -1) {
+            params.add("LIMIT");
+        }
+        if (offset != -1) {
+            params.add(offset);
+        }
+        if (count != -1) {
+            params.add(count);
+        }
+        if (getPatterns != null) {
+            for (String pattern : getPatterns) {
+                params.add("GET");
+                params.add(pattern);
+            }
+        }
+        if (alpha) {
+            params.add("ALPHA");
+        }
+        if (order != null) {
+            params.add(order);
+        }
+
+        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_LIST, params.toArray());
+    }
+
+    @Override
+    public RFuture<List<V>> rangeAsync(int toIndex) {
+        return rangeAsync(0, toIndex);
+    }
+
+    @Override
+    public RFuture<List<V>> rangeAsync(int fromIndex, int toIndex) {
+        return commandExecutor.readAsync(getName(), codec, LRANGE, getName(), fromIndex, toIndex);
+    }
+
+    @Override
+    public List<V> range(int toIndex) {
+        return get(rangeAsync(toIndex));
+    }
+
+    @Override
+    public List<V> range(int fromIndex, int toIndex) {
+        return get(rangeAsync(fromIndex, toIndex));
     }
 
 }

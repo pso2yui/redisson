@@ -14,7 +14,6 @@ import java.util.concurrent.TimeUnit;
 import org.junit.Assert;
 import org.junit.Test;
 import org.redisson.api.RSetCacheReactive;
-import org.redisson.codec.MsgPackJacksonCodec;
 
 public class RedissonSetCacheReactiveTest extends BaseReactiveTest {
 
@@ -190,14 +189,14 @@ public class RedissonSetCacheReactiveTest extends BaseReactiveTest {
     @Test
     public void testSize() {
         RSetCacheReactive<Integer> set = redisson.getSetCache("set");
-        Assert.assertEquals(1, sync(set.add(1)).intValue());
-        Assert.assertEquals(1, sync(set.add(2)).intValue());
-        Assert.assertEquals(1, sync(set.add(3)).intValue());
-        Assert.assertEquals(0, sync(set.add(3)).intValue());
-        Assert.assertEquals(0, sync(set.add(3)).intValue());
-        Assert.assertEquals(1, sync(set.add(4)).intValue());
-        Assert.assertEquals(1, sync(set.add(5)).intValue());
-        Assert.assertEquals(0, sync(set.add(5)).intValue());
+        Assert.assertEquals(true, sync(set.add(1)));
+        Assert.assertEquals(true, sync(set.add(2)));
+        Assert.assertEquals(true, sync(set.add(3)));
+        Assert.assertEquals(false, sync(set.add(3)));
+        Assert.assertEquals(false, sync(set.add(3)));
+        Assert.assertEquals(true, sync(set.add(4)));
+        Assert.assertEquals(true, sync(set.add(5)));
+        Assert.assertEquals(false, sync(set.add(5)));
 
         Assert.assertEquals(5, sync(set.size()).intValue());
     }
@@ -280,7 +279,7 @@ public class RedissonSetCacheReactiveTest extends BaseReactiveTest {
 
     @Test
     public void testScheduler() throws InterruptedException {
-        RSetCacheReactive<String> cache = redisson.getSetCache("simple33", new MsgPackJacksonCodec());
+        RSetCacheReactive<String> cache = redisson.getSetCache("simple33");
         Assert.assertFalse(sync(cache.contains("33")));
 
         Assert.assertTrue(sync(cache.add("33", 5, TimeUnit.SECONDS)));

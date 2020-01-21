@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 package org.redisson;
 
 import java.util.Arrays;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 
@@ -29,9 +28,6 @@ import org.redisson.client.protocol.RedisStrictCommand;
 import org.redisson.command.CommandAsyncExecutor;
 import org.redisson.pubsub.LockPubSub;
 
-import io.netty.util.concurrent.Future;
-import io.netty.util.concurrent.FutureListener;
-
 /**
  * Lock will be removed automatically if client disconnects.
  *
@@ -40,8 +36,8 @@ import io.netty.util.concurrent.FutureListener;
  */
 public class RedissonWriteLock extends RedissonLock implements RLock {
 
-    protected RedissonWriteLock(CommandAsyncExecutor commandExecutor, String name, UUID id) {
-        super(commandExecutor, name, id);
+    protected RedissonWriteLock(CommandAsyncExecutor commandExecutor, String name) {
+        super(commandExecutor, name);
     }
 
     @Override
@@ -50,7 +46,7 @@ public class RedissonWriteLock extends RedissonLock implements RLock {
     }
 
     @Override
-    String getLockName(long threadId) {
+    protected String getLockName(long threadId) {
         return super.getLockName(threadId) + ":write";
     }
     
@@ -111,7 +107,7 @@ public class RedissonWriteLock extends RedissonLock implements RLock {
                 "end; "
                 + "return nil;",
         Arrays.<Object>asList(getName(), getChannelName()), 
-        LockPubSub.unlockMessage, internalLockLeaseTime, getLockName(threadId));
+        LockPubSub.READ_UNLOCK_MESSAGE, internalLockLeaseTime, getLockName(threadId));
     }
     
     @Override
@@ -121,25 +117,15 @@ public class RedissonWriteLock extends RedissonLock implements RLock {
 
     @Override
     public RFuture<Boolean> forceUnlockAsync() {
-        RFuture<Boolean> result = commandExecutor.evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
+        cancelExpirationRenewal(null);
+        return commandExecutor.evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
               "if (redis.call('hget', KEYS[1], 'mode') == 'write') then " +
                   "redis.call('del', KEYS[1]); " +
                   "redis.call('publish', KEYS[2], ARGV[1]); " +
                   "return 1; " +
               "end; " +
               "return 0; ",
-              Arrays.<Object>asList(getName(), getChannelName()), LockPubSub.unlockMessage);
-
-        result.addListener(new FutureListener<Boolean>() {
-            @Override
-            public void operationComplete(Future<Boolean> future) throws Exception {
-                if (future.isSuccess() && future.getNow()) {
-                    cancelExpirationRenewal();
-                }
-            }
-        });
-
-        return result;
+              Arrays.<Object>asList(getName(), getChannelName()), LockPubSub.READ_UNLOCK_MESSAGE);
     }
 
     @Override

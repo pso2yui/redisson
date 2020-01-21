@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,20 +15,15 @@
  */
 package org.redisson.reactive;
 
-import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
+import java.util.function.LongConsumer;
 
-import org.reactivestreams.Publisher;
-import org.reactivestreams.Subscriber;
-import org.reactivestreams.Subscription;
+import org.redisson.api.RFuture;
 import org.redisson.client.RedisClient;
 import org.redisson.client.protocol.decoder.ListScanResult;
-import org.redisson.client.protocol.decoder.ScanObjectEntry;
 
-import io.netty.buffer.ByteBuf;
-import reactor.rx.Stream;
-import reactor.rx.subscription.ReactiveSubscription;
+import reactor.core.publisher.FluxSink;
 
 /**
  * 
@@ -36,139 +31,74 @@ import reactor.rx.subscription.ReactiveSubscription;
  *
  * @param <V> value type
  */
-public abstract class SetReactiveIterator<V> extends Stream<V> {
+public abstract class SetReactiveIterator<V> implements Consumer<FluxSink<V>> {
 
     @Override
-    public void subscribe(final Subscriber<? super V> t) {
-        t.onSubscribe(new ReactiveSubscription<V>(this, t) {
-
-            private List<ByteBuf> firstValues;
-            private List<ByteBuf> lastValues;
+    public void accept(FluxSink<V> emitter) {
+        emitter.onRequest(new LongConsumer() {
+            
             private long nextIterPos;
             private RedisClient client;
-
+            private AtomicLong elementsRead = new AtomicLong();
+            
             private boolean finished;
-
+            private volatile boolean completed;
+            private AtomicLong readAmount = new AtomicLong();
+            
             @Override
-            protected void onRequest(long n) {
-                nextValues();
-            }
-
-            private void handle(List<ScanObjectEntry> vals) {
-                for (ScanObjectEntry val : vals) {
-                    onNext((V)val.getObj());
+            public void accept(long value) {
+                readAmount.addAndGet(value);
+                if (completed || elementsRead.get() == 0) {
+                    nextValues(emitter);
+                    completed = false;
                 }
             }
-
-            protected void nextValues() {
-                final ReactiveSubscription<V> m = this;
-                scanIteratorReactive(client, nextIterPos).subscribe(new Subscriber<ListScanResult<ScanObjectEntry>>() {
-
-                    @Override
-                    public void onSubscribe(Subscription s) {
-                        s.request(Long.MAX_VALUE);
+            
+            protected void nextValues(FluxSink<V> emitter) {
+                scanIterator(client, nextIterPos).onComplete((res, e) -> {
+                    if (e != null) {
+                        emitter.error(e);
+                        return;
+                    }
+                    
+                    if (finished) {
+                        client = null;
+                        nextIterPos = 0;
+                        return;
                     }
 
-                    @Override
-                    public void onNext(ListScanResult<ScanObjectEntry> res) {
-                        if (finished) {
-                            free(firstValues);
-                            free(lastValues);
+                    client = res.getRedisClient();
+                    nextIterPos = res.getPos();
 
-                            client = null;
-                            firstValues = null;
-                            lastValues = null;
-                            nextIterPos = 0;
-                            return;
-                        }
-
-                        long prevIterPos = nextIterPos;
-                        if (lastValues != null) {
-                            free(lastValues);
-                        }
-                        
-                        lastValues = convert(res.getValues());
-                        client = res.getRedisClient();
-                        
-                        if (nextIterPos == 0 && firstValues == null) {
-                            firstValues = lastValues;
-                            lastValues = null;
-                            if (firstValues.isEmpty()) {
-                                client = null;
-                                firstValues = null;
-                                nextIterPos = 0;
-                                prevIterPos = -1;
-                            }
-                        } else { 
-                            if (firstValues.isEmpty()) {
-                                firstValues = lastValues;
-                                lastValues = null;
-                                if (firstValues.isEmpty()) {
-                                    if (res.getPos() == 0) {
-                                        finished = true;
-                                        m.onComplete();
-                                        return;
-                                    }
-                                }
-                            } else if (lastValues.removeAll(firstValues)) {
-                                free(firstValues);
-                                free(lastValues);
-
-                                client = null;
-                                firstValues = null;
-                                lastValues = null;
-                                nextIterPos = 0;
-                                prevIterPos = -1;
-                                finished = true;
-                                m.onComplete();
-                                return;
-                            }
-                        }
-
-                        handle(res.getValues());
-
-                        nextIterPos = res.getPos();
-                        
-                        if (prevIterPos == nextIterPos) {
-                            finished = true;
-                            m.onComplete();
-                        }
+                    for (Object val : res.getValues()) {
+                        emitter.next((V) val);
+                        elementsRead.incrementAndGet();
                     }
-
-                    @Override
-                    public void onError(Throwable error) {
-                        m.onError(error);
+                    
+                    if (elementsRead.get() >= readAmount.get()) {
+                        emitter.complete();
+                        elementsRead.set(0);
+                        completed = true;
+                        return;
                     }
-
-                    @Override
-                    public void onComplete() {
-                        if (finished) {
-                            return;
-                        }
-                        nextValues();
+                    if (res.getPos() == 0 && !tryAgain()) {
+                        finished = true;
+                        emitter.complete();
                     }
+                    
+                    if (finished || completed) {
+                        return;
+                    }
+                    nextValues(emitter);
                 });
             }
         });
     }
     
-    private void free(List<ByteBuf> list) {
-        if (list == null) {
-            return;
-        }
-        for (ByteBuf byteBuf : list) {
-            byteBuf.release();
-        }
+    protected boolean tryAgain() {
+        return false;
     }
     
-    private List<ByteBuf> convert(List<ScanObjectEntry> list) {
-        List<ByteBuf> result = new ArrayList<ByteBuf>(list.size());
-        for (ScanObjectEntry entry : list) {
-            result.add(entry.getBuf());
-        }
-        return result;
-    }
-
-    protected abstract Publisher<ListScanResult<ScanObjectEntry>> scanIteratorReactive(RedisClient client, long nextIterPos);
+    protected abstract RFuture<ListScanResult<Object>> scanIterator(RedisClient client, long nextIterPos);
 
 }

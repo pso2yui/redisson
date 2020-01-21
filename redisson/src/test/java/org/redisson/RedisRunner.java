@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.redisson.client.RedisClient;
@@ -241,7 +242,7 @@ public class RedisRunner {
             String line;
             try {
                 while (p.isAlive() && (line = reader.readLine()) != null && !RedissonRuntimeEnvironment.isTravis) {
-                    System.out.println("REDIS PROCESS: " + line);
+//                    System.out.println("REDIS PROCESS: " + line);
                 }
             } catch (IOException ex) {
                 System.out.println("Exception: " + ex.getLocalizedMessage());
@@ -277,7 +278,7 @@ public class RedisRunner {
             try (PrintWriter printer = new PrintWriter(new FileWriter(confFile))) {
                 args.stream().forEach((arg) -> {
                     if (arg.contains("--")) {
-                        printer.println(arg.replace("--", "\n\r"));
+                        printer.println(arg.replace("--", ""));
                     }
                 });
             }
@@ -431,7 +432,7 @@ public class RedisRunner {
     public RedisRunner nosave() {
         this.nosave = true;
         options.remove(REDIS_OPTIONS.SAVE);
-        addConfigOption(REDIS_OPTIONS.SAVE, "''");
+//        addConfigOption(REDIS_OPTIONS.SAVE, "''");
         return this;
     }
 
@@ -472,7 +473,9 @@ public class RedisRunner {
         this.randomDir = true;
         options.remove(REDIS_OPTIONS.DIR);
         makeRandomDefaultDir();
-        addConfigOption(REDIS_OPTIONS.DIR, defaultDir);
+        
+        
+        addConfigOption(REDIS_OPTIONS.DIR, "\"" + defaultDir + "\"");
         return this;
     }
 
@@ -868,12 +871,15 @@ public class RedisRunner {
             System.out.println("REDIS RUNNER: Making directory " + f.getAbsolutePath());
             f.mkdirs();
             this.defaultDir = f.getAbsolutePath();
+            if (RedissonRuntimeEnvironment.isWindows) {
+                defaultDir = defaultDir.replace("\\", "\\\\");
+            }
         }
     }
 
     public static final class RedisProcess {
 
-        private final Process redisProcess;
+        private Process redisProcess;
         private final RedisRunner runner;
         private RedisVersion redisVersion;
         
@@ -882,6 +888,40 @@ public class RedisRunner {
             this.runner = runner;
         }
 
+        public void restart(int startTimeout) {
+            if (runner.isNosave() && !runner.isRandomDir()) {
+                RedisClient c = createDefaultRedisClientInstance();
+                RedisConnection connection = c.connect();
+                try {
+                    connection.async(new RedisStrictCommand<Void>("SHUTDOWN", "NOSAVE", new VoidReplayConvertor()))
+                            .await(3, TimeUnit.SECONDS);
+                } catch (InterruptedException interruptedException) {
+                    //shutdown via command failed, lets wait and kill it later.
+                }
+                c.shutdown();
+                connection.closeAsync().syncUninterruptibly();
+            }
+            Process p = redisProcess;
+            p.destroy();
+            boolean normalTermination = false;
+            try {
+                normalTermination = p.waitFor(5, TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                //OK lets hurry up by force kill;
+            }
+            if (!normalTermination) {
+                p = p.destroyForcibly();
+            }
+            
+            Executors.newScheduledThreadPool(1).schedule(() -> {
+                try {
+                    redisProcess = runner.run().redisProcess;
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }, startTimeout, TimeUnit.SECONDS);
+        }
+        
         public int stop() {
             if (runner.isNosave() && !runner.isRandomDir()) {
                 RedisClient c = createDefaultRedisClientInstance();

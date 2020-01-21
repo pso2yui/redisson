@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
  */
 package org.redisson;
 
-import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -23,20 +22,26 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Stream;
 
+import org.redisson.api.RCountDownLatch;
 import org.redisson.api.RFuture;
+import org.redisson.api.RLock;
+import org.redisson.api.RPermitExpirableSemaphore;
+import org.redisson.api.RReadWriteLock;
+import org.redisson.api.RSemaphore;
 import org.redisson.api.RSet;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.SortOrder;
 import org.redisson.api.mapreduce.RCollectionMapReduce;
 import org.redisson.client.RedisClient;
 import org.redisson.client.codec.Codec;
-import org.redisson.client.codec.ScanCodec;
 import org.redisson.client.protocol.RedisCommands;
 import org.redisson.client.protocol.decoder.ListScanResult;
-import org.redisson.client.protocol.decoder.ScanObjectEntry;
 import org.redisson.command.CommandAsyncExecutor;
+import org.redisson.iterator.RedissonBaseIterator;
 import org.redisson.mapreduce.RedissonCollectionMapReduce;
+import org.redisson.misc.RedissonPromise;
 
 /**
  * Distributed and concurrent implementation of {@link java.util.Set}
@@ -49,7 +54,7 @@ public class RedissonSet<V> extends RedissonExpirable implements RSet<V>, ScanIt
 
     RedissonClient redisson;
     
-    protected RedissonSet(CommandAsyncExecutor commandExecutor, String name, RedissonClient redisson) {
+    public RedissonSet(CommandAsyncExecutor commandExecutor, String name, RedissonClient redisson) {
         super(commandExecutor, name);
         this.redisson = redisson;
     }
@@ -90,28 +95,32 @@ public class RedissonSet<V> extends RedissonExpirable implements RSet<V>, ScanIt
     }
 
     @Override
-    public ListScanResult<ScanObjectEntry> scanIterator(String name, RedisClient client, long startPos, String pattern) {
-        if (pattern == null) {
-            RFuture<ListScanResult<ScanObjectEntry>> f = commandExecutor.readAsync(client, name, new ScanCodec(codec), RedisCommands.SSCAN, name, startPos);
-            return get(f);
-        }
-
-        RFuture<ListScanResult<ScanObjectEntry>> f = commandExecutor.readAsync(client, name, new ScanCodec(codec), RedisCommands.SSCAN, name, startPos, "MATCH", pattern);
-        return get(f);
+    public ListScanResult<Object> scanIterator(String name, RedisClient client, long startPos, String pattern, int count) {
+        return get(scanIteratorAsync(name, client, startPos, pattern, count));
     }
 
     @Override
-    public Iterator<V> iterator(final String pattern) {
+    public Iterator<V> iterator(int count) {
+        return iterator(null, count);
+    }
+    
+    @Override
+    public Iterator<V> iterator(String pattern) {
+        return iterator(pattern, 10);
+    }
+    
+    @Override
+    public Iterator<V> iterator(final String pattern, final int count) {
         return new RedissonBaseIterator<V>() {
 
             @Override
-            ListScanResult<ScanObjectEntry> iterator(RedisClient client, long nextIterPos) {
-                return scanIterator(getName(), client, nextIterPos, pattern);
+            protected ListScanResult<Object> iterator(RedisClient client, long nextIterPos) {
+                return scanIterator(getName(), client, nextIterPos, pattern, count);
             }
 
             @Override
-            void remove(V value) {
-                RedissonSet.this.remove(value);
+            protected void remove(Object value) {
+                RedissonSet.this.remove((V) value);
             }
             
         };
@@ -185,13 +194,23 @@ public class RedissonSet<V> extends RedissonExpirable implements RSet<V>, ScanIt
     }
 
     @Override
+    public Set<V> random(int count) {
+        return get(randomAsync(count));
+    }
+
+    @Override
+    public RFuture<Set<V>> randomAsync(int count) {
+        return commandExecutor.writeAsync(getName(), codec, RedisCommands.SRANDMEMBER, getName(), count);
+    }
+
+    @Override
     public RFuture<Boolean> removeAsync(Object o) {
         return commandExecutor.writeAsync(getName(o), codec, RedisCommands.SREM_SINGLE, getName(o), encode(o));
     }
 
     @Override
     public boolean remove(Object value) {
-        return get(removeAsync((V)value));
+        return get(removeAsync((V) value));
     }
 
     @Override
@@ -212,15 +231,17 @@ public class RedissonSet<V> extends RedissonExpirable implements RSet<V>, ScanIt
     @Override
     public RFuture<Boolean> containsAllAsync(Collection<?> c) {
         if (c.isEmpty()) {
-            return newSucceededFuture(true);
+            return RedissonPromise.newSucceededFuture(true);
         }
+        
+        String tempName = suffixName(getName(), "redisson_temp");
         
         return commandExecutor.evalWriteAsync(getName(), codec, RedisCommands.EVAL_BOOLEAN,
                         "redis.call('sadd', KEYS[2], unpack(ARGV)); "
                         + "local size = redis.call('sdiff', KEYS[2], KEYS[1]);"
                         + "redis.call('del', KEYS[2]); "
                         + "return #size == 0 and 1 or 0; ",
-                       Arrays.<Object>asList(getName(), "redisson_temp__{" + getName() + "}"), encode(c).toArray());
+                       Arrays.<Object>asList(getName(), tempName), encode(c).toArray());
     }
 
     @Override
@@ -231,7 +252,7 @@ public class RedissonSet<V> extends RedissonExpirable implements RSet<V>, ScanIt
     @Override
     public RFuture<Boolean> addAllAsync(Collection<? extends V> c) {
         if (c.isEmpty()) {
-            return newSucceededFuture(false);
+            return RedissonPromise.newSucceededFuture(false);
         }
         
         List<Object> args = new ArrayList<Object>(c.size() + 1);
@@ -250,19 +271,23 @@ public class RedissonSet<V> extends RedissonExpirable implements RSet<V>, ScanIt
         if (c.isEmpty()) {
             return deleteAsync();
         }
+        
+        String tempName = suffixName(getName(), "redisson_temp");
+        
         return commandExecutor.evalWriteAsync(getName(), codec, RedisCommands.EVAL_BOOLEAN,
                "redis.call('sadd', KEYS[2], unpack(ARGV)); "
                 + "local prevSize = redis.call('scard', KEYS[1]); "
                 + "local size = redis.call('sinterstore', KEYS[1], KEYS[1], KEYS[2]);"
                 + "redis.call('del', KEYS[2]); "
                 + "return size ~= prevSize and 1 or 0; ",
-            Arrays.<Object>asList(getName(), "redisson_temp__{" + getName() + "}"), encode(c).toArray());
+            Arrays.<Object>asList(getName(), tempName), 
+            encode(c).toArray());
     }
 
     @Override
     public RFuture<Boolean> removeAllAsync(Collection<?> c) {
         if (c.isEmpty()) {
-            return newSucceededFuture(false);
+            return RedissonPromise.newSucceededFuture(false);
         }
         
         List<Object> args = new ArrayList<Object>(c.size() + 1);
@@ -361,6 +386,7 @@ public class RedissonSet<V> extends RedissonExpirable implements RSet<V>, ScanIt
     }
 
     @Override
+    @SuppressWarnings("AvoidInlineConditionals")
     public String toString() {
         Iterator<V> it = iterator();
         if (! it.hasNext())
@@ -419,7 +445,7 @@ public class RedissonSet<V> extends RedissonExpirable implements RSet<V>, ScanIt
 
     @Override
     public <T> Collection<T> readSort(String byPattern, List<String> getPatterns, SortOrder order) {
-        return (Collection<T>)get(readSortAsync(byPattern, getPatterns, order));
+        return (Collection<T>) get(readSortAsync(byPattern, getPatterns, order));
     }
     
     @Override
@@ -429,35 +455,74 @@ public class RedissonSet<V> extends RedissonExpirable implements RSet<V>, ScanIt
     
     @Override
     public <T> Collection<T> readSort(String byPattern, List<String> getPatterns, SortOrder order, int offset, int count) {
-        return (Collection<T>)get(readSortAsync(byPattern, getPatterns, order, offset, count));
+        return (Collection<T>) get(readSortAsync(byPattern, getPatterns, order, offset, count));
     }
 
     @Override
     public <T> RFuture<Collection<T>> readSortAsync(String byPattern, List<String> getPatterns, SortOrder order, int offset, int count) {
-        List<Object> params = new ArrayList<Object>();
-        params.add(getName());
-        if (byPattern != null) {
-            params.add("BY");
-            params.add(byPattern);
-        }
-        if (offset != -1 && count != -1) {
-            params.add("LIMIT");
-        }
-        if (offset != -1) {
-            params.add(offset);
-        }
-        if (count != -1) {
-            params.add(count);
-        }
-        for (String pattern : getPatterns) {
-            params.add("GET");
-            params.add(pattern);
-        }
-        params.add(order);
-        
-        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_SET, params.toArray());
+        return readSortAsync(byPattern, getPatterns, order, offset, count, false);
     }
-    
+
+    @Override
+    public Set<V> readSortAlpha(SortOrder order) {
+        return get(readSortAlphaAsync(order));
+    }
+
+    @Override
+    public Set<V> readSortAlpha(SortOrder order, int offset, int count) {
+        return get(readSortAlphaAsync(order, offset, count));
+    }
+
+    @Override
+    public Set<V> readSortAlpha(String byPattern, SortOrder order) {
+        return get(readSortAlphaAsync(byPattern, order));
+    }
+
+    @Override
+    public Set<V> readSortAlpha(String byPattern, SortOrder order, int offset, int count) {
+        return get(readSortAlphaAsync(byPattern, order, offset, count));
+    }
+
+    @Override
+    public <T> Collection<T> readSortAlpha(String byPattern, List<String> getPatterns, SortOrder order) {
+        return (Collection<T>) get(readSortAlphaAsync(byPattern, getPatterns, order));
+    }
+
+    @Override
+    public <T> Collection<T> readSortAlpha(String byPattern, List<String> getPatterns, SortOrder order, int offset, int count) {
+        return (Collection<T>) get(readSortAlphaAsync(byPattern, getPatterns, order, offset, count));
+    }
+
+    @Override
+    public RFuture<Set<V>> readSortAlphaAsync(SortOrder order) {
+        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_SET, getName(), "ALPHA", order);
+    }
+
+    @Override
+    public RFuture<Set<V>> readSortAlphaAsync(SortOrder order, int offset, int count) {
+        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_SET, getName(), "LIMIT", offset, count, "ALPHA", order);
+    }
+
+    @Override
+    public RFuture<Set<V>> readSortAlphaAsync(String byPattern, SortOrder order) {
+        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_SET, getName(), "BY", byPattern, "ALPHA", order);
+    }
+
+    @Override
+    public RFuture<Set<V>> readSortAlphaAsync(String byPattern, SortOrder order, int offset, int count) {
+        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_SET, getName(), "BY", byPattern, "LIMIT", offset, count, "ALPHA", order);
+    }
+
+    @Override
+    public <T> RFuture<Collection<T>> readSortAlphaAsync(String byPattern, List<String> getPatterns, SortOrder order) {
+        return readSortAlphaAsync(byPattern, getPatterns, order, -1, -1);
+    }
+
+    @Override
+    public <T> RFuture<Collection<T>> readSortAlphaAsync(String byPattern, List<String> getPatterns, SortOrder order, int offset, int count) {
+        return readSortAsync(byPattern, getPatterns, order, offset, count, true);
+    }
+
     @Override
     public int sortTo(String destName, SortOrder order) {
         return get(sortToAsync(destName, order));
@@ -540,5 +605,97 @@ public class RedissonSet<V> extends RedissonExpirable implements RSet<V>, ScanIt
         
         return commandExecutor.writeAsync(getName(), codec, RedisCommands.SORT_TO, params.toArray());
     }
+
+    @Override
+    public RPermitExpirableSemaphore getPermitExpirableSemaphore(V value) {
+        String lockName = getLockByValue(value, "permitexpirablesemaphore");
+        return new RedissonPermitExpirableSemaphore(commandExecutor, lockName);
+    }
+
+    @Override
+    public RSemaphore getSemaphore(V value) {
+        String lockName = getLockByValue(value, "semaphore");
+        return new RedissonSemaphore(commandExecutor, lockName);
+    }
     
+    @Override
+    public RCountDownLatch getCountDownLatch(V value) {
+        String lockName = getLockByValue(value, "countdownlatch");
+        return new RedissonCountDownLatch(commandExecutor, lockName);
+    }
+    
+    @Override
+    public RLock getFairLock(V value) {
+        String lockName = getLockByValue(value, "fairlock");
+        return new RedissonFairLock(commandExecutor, lockName);
+    }
+    
+    @Override
+    public RLock getLock(V value) {
+        String lockName = getLockByValue(value, "lock");
+        return new RedissonLock(commandExecutor, lockName);
+    }
+    
+    @Override
+    public RReadWriteLock getReadWriteLock(V value) {
+        String lockName = getLockByValue(value, "rw_lock");
+        return new RedissonReadWriteLock(commandExecutor, lockName);
+    }
+
+    @Override
+    public RFuture<ListScanResult<Object>> scanIteratorAsync(String name, RedisClient client, long startPos,
+            String pattern, int count) {
+        if (pattern == null) {
+            return commandExecutor.readAsync(client, name, codec, RedisCommands.SSCAN, name, startPos, "COUNT", count);
+        }
+
+        return commandExecutor.readAsync(client, name, codec, RedisCommands.SSCAN, name, startPos, "MATCH", pattern, "COUNT", count);
+    }
+
+    private <T> RFuture<Collection<T>> readSortAsync(String byPattern, List<String> getPatterns, SortOrder order, int offset, int count, boolean alpha) {
+        List<Object> params = new ArrayList<Object>();
+        params.add(getName());
+        if (byPattern != null) {
+            params.add("BY");
+            params.add(byPattern);
+        }
+        if (offset != -1 && count != -1) {
+            params.add("LIMIT");
+        }
+        if (offset != -1) {
+            params.add(offset);
+        }
+        if (count != -1) {
+            params.add(count);
+        }
+        if (getPatterns != null) {
+            for (String pattern : getPatterns) {
+                params.add("GET");
+                params.add(pattern);
+            }
+        }
+        if (alpha) {
+            params.add("ALPHA");
+        }
+        if (order != null) {
+            params.add(order);
+        }
+
+        return commandExecutor.readAsync(getName(), codec, RedisCommands.SORT_SET, params.toArray());
+    }
+
+    @Override
+    public Stream<V> stream(int count) {
+        return toStream(iterator(count));
+    }
+
+    @Override
+    public Stream<V> stream(String pattern, int count) {
+        return toStream(iterator(pattern, count));
+    }
+
+    @Override
+    public Stream<V> stream(String pattern) {
+        return toStream(iterator(pattern));
+    }
 }

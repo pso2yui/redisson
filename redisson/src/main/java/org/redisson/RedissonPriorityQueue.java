@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,23 +24,20 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.Iterator;
-import java.util.List;
 import java.util.NoSuchElementException;
 
 import org.redisson.api.RBucket;
 import org.redisson.api.RFuture;
 import org.redisson.api.RLock;
 import org.redisson.api.RPriorityQueue;
+import org.redisson.api.RedissonClient;
 import org.redisson.client.codec.Codec;
 import org.redisson.client.codec.StringCodec;
+import org.redisson.client.protocol.RedisCommand;
 import org.redisson.client.protocol.RedisCommands;
 import org.redisson.command.CommandExecutor;
 import org.redisson.misc.RPromise;
 import org.redisson.misc.RedissonPromise;
-
-import io.netty.buffer.ByteBuf;
-import io.netty.util.concurrent.Future;
-import io.netty.util.concurrent.FutureListener;
 
 /**
  *
@@ -67,7 +64,7 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
     public static class BinarySearchResult<V> {
 
         private V value;
-        private Integer index;
+        private int index = -1;
 
         public BinarySearchResult(V value) {
             super();
@@ -77,10 +74,10 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
         public BinarySearchResult() {
         }
 
-        public void setIndex(Integer index) {
+        public void setIndex(int index) {
             this.index = index;
         }
-        public Integer getIndex() {
+        public int getIndex() {
             return index;
         }
 
@@ -98,7 +95,7 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
     RLock lock;
     private RBucket<String> comparatorHolder;
 
-    protected RedissonPriorityQueue(CommandExecutor commandExecutor, String name, Redisson redisson) {
+    public RedissonPriorityQueue(CommandExecutor commandExecutor, String name, RedissonClient redisson) {
         super(commandExecutor, name, redisson);
         this.commandExecutor = commandExecutor;
 
@@ -108,7 +105,7 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
         loadComparator();
     }
 
-    public RedissonPriorityQueue(Codec codec, CommandExecutor commandExecutor, String name, Redisson redisson) {
+    public RedissonPriorityQueue(Codec codec, CommandExecutor commandExecutor, String name, RedissonClient redisson) {
         super(codec, commandExecutor, name, redisson);
         this.commandExecutor = commandExecutor;
 
@@ -162,28 +159,13 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
     }
 
     @Override
-    public List<V> readAll() {
-        return get(readAllAsync());
-    }
-
-    @Override
-    public RFuture<List<V>> readAllAsync() {
-        return commandExecutor.readAsync(getName(), codec, RedisCommands.LRANGE, getName(), 0, -1);
-    }
-    
-    @Override
     public boolean offer(V e) {
         return add(e);
     }
 
-//    @Override
-    public RFuture<Boolean> offerAsync(V e) {
-        return addAsync(e);
-    }
-    
     @Override
-    public boolean contains(final Object o) {
-        return binarySearch((V)o, codec).getIndex() >= 0;
+    public boolean contains(Object o) {
+        return binarySearch((V) o, codec).getIndex() >= 0;
     }
 
     @Override
@@ -201,8 +183,6 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
                 index = res.getIndex() + 1;
             }
                 
-            ByteBuf encodedValue = encode(value);
-            
             commandExecutor.evalWrite(getName(), RedisCommands.EVAL_VOID, 
                "local len = redis.call('llen', KEYS[1]);"
                 + "if tonumber(ARGV[1]) < len then "
@@ -210,7 +190,9 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
                     + "redis.call('linsert', KEYS[1], 'before', pivot, ARGV[2]);"
                     + "return;"
                 + "end;"
-                + "redis.call('rpush', KEYS[1], ARGV[2]);", Arrays.<Object>asList(getName()), index, encodedValue);
+                + "redis.call('rpush', KEYS[1], ARGV[2]);", 
+                    Arrays.<Object>asList(getName()), 
+                    index, encode(value));
             return true;
         } finally {
             lock.unlock();
@@ -240,7 +222,7 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
                 return false;
             }
 
-            remove((int)res.getIndex());
+            remove((int) res.getIndex());
             return true;
         } finally {
             lock.unlock();
@@ -302,42 +284,35 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
         return comparator;
     }
 
-//    @Override
     public RFuture<V> pollAsync() {
-        final long threadId = Thread.currentThread().getId();
-        final RPromise<V> result = new RedissonPromise<V>();
-        lock.lockAsync(threadId).addListener(new FutureListener<Void>() {
-            @Override
-            public void operationComplete(Future<Void> future) throws Exception {
-                if (!future.isSuccess()) {
-                    result.tryFailure(future.cause());
+        return pollAsync(RedisCommands.LPOP, getName());
+    }
+
+    protected <T> RFuture<V> pollAsync(RedisCommand<T> command, Object... params) {
+        long threadId = Thread.currentThread().getId();
+        RPromise<V> result = new RedissonPromise<V>();
+        lock.lockAsync(threadId).onComplete((r, exc) -> {
+            if (exc != null) {
+                result.tryFailure(exc);
+                return;
+            }
+            
+            RFuture<V> f = commandExecutor.writeAsync(getName(), codec, command, params);
+            f.onComplete((value, e) -> {
+                if (e != null) {
+                    result.tryFailure(e);
                     return;
                 }
                 
-                RFuture<V> f = commandExecutor.writeAsync(getName(), codec, RedisCommands.LPOP, getName());
-                f.addListener(new FutureListener<V>() {
-                    @Override
-                    public void operationComplete(Future<V> future) throws Exception {
-                        if (!future.isSuccess()) {
-                            result.tryFailure(future.cause());
-                            return;
-                        }
-                        
-                        final V value = future.getNow();
-                        lock.unlockAsync(threadId).addListener(new FutureListener<Void>() {
-                            @Override
-                            public void operationComplete(Future<Void> future) throws Exception {
-                                if (!future.isSuccess()) {
-                                    result.tryFailure(future.cause());
-                                    return;
-                                }
-                                
-                                result.trySuccess(value);
-                            }
-                        });
+                lock.unlockAsync(threadId).onComplete((res, ex) -> {
+                    if (ex != null) {
+                        result.tryFailure(ex);
+                        return;
                     }
+                    
+                    result.trySuccess(value);
                 });
-            }
+            });
         });
         return result;
     }
@@ -371,13 +346,13 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
     }
 
     private String getComparatorKeyName() {
-        return "redisson_sortedset_comparator:{" + getName() + "}";
+        return suffixName(getName(), "redisson_sortedset_comparator");
     }
 
     @Override
     public boolean trySetComparator(Comparator<? super V> comparator) {
         String className = comparator.getClass().getName();
-        final String comparatorSign = className + ":" + calcClassSign(className);
+        String comparatorSign = className + ":" + calcClassSign(className);
 
         Boolean res = commandExecutor.evalWrite(getName(), StringCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
                 "if redis.call('llen', KEYS[1]) == 0 then "
@@ -436,6 +411,8 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
         return indexRes;
     }
 
+    @Override
+    @SuppressWarnings("AvoidInlineConditionals")
     public String toString() {
         Iterator<V> it = iterator();
         if (! it.hasNext())
@@ -450,6 +427,15 @@ public class RedissonPriorityQueue<V> extends RedissonList<V> implements RPriori
                 return sb.append(']').toString();
             sb.append(',').append(' ');
         }
+    }
+    
+    @Override
+    public V pollLastAndOfferFirstTo(String queueName) {
+        return get(pollLastAndOfferFirstToAsync(queueName));
+    }
+
+    public RFuture<V> pollLastAndOfferFirstToAsync(String queueName) {
+        return pollAsync(RedisCommands.RPOPLPUSH, getName(), queueName);
     }
 
 }

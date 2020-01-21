@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package org.redisson.eviction;
 
 import java.util.Arrays;
 
+import org.redisson.RedissonObject;
 import org.redisson.api.RFuture;
 import org.redisson.client.codec.LongCodec;
 import org.redisson.client.protocol.RedisCommands;
@@ -44,21 +45,20 @@ public class MapCacheEvictionTask extends EvictionTask {
         this.maxIdleSetName = maxIdleSetName;
         this.expiredChannelName = expiredChannelName;
         this.lastAccessTimeSetName = lastAccessTimeSetName;
-        this.executeTaskOnceLatchName = prefixName("redisson__execute_task_once_latch", name);
+        this.executeTaskOnceLatchName = RedissonObject.prefixName("redisson__execute_task_once_latch", name);
     }
-
-    protected String prefixName(String prefix, String name) {
-        if (name.contains("{")) {
-            return prefix + ":" + name;
-        }
-        return prefix + ":{" + name + "}";
+    
+    @Override
+    String getName() {
+        return name;
     }
     
     @Override
     RFuture<Integer> execute() {
+        int latchExpireTime = Math.min(delay, 30);
         return executor.evalWriteAsync(name, LongCodec.INSTANCE, RedisCommands.EVAL_INTEGER,
                 "if redis.call('setnx', KEYS[6], ARGV[4]) == 0 then "
-                 + "return 0;"
+                 + "return -1;"
               + "end;"
               + "redis.call('expire', KEYS[6], ARGV[3]); "
                +"local expiredKeys1 = redis.call('zrangebyscore', KEYS[2], 0, ARGV[1], 'limit', 0, ARGV[2]); "
@@ -99,7 +99,7 @@ public class MapCacheEvictionTask extends EvictionTask {
               + "end; "
               + "return #expiredKeys1 + #expiredKeys2;",
               Arrays.<Object>asList(name, timeoutSetName, maxIdleSetName, expiredChannelName, lastAccessTimeSetName, executeTaskOnceLatchName), 
-              System.currentTimeMillis(), keysLimit, delay, 1);
+              System.currentTimeMillis(), keysLimit, latchExpireTime, 1);
     }
     
 }

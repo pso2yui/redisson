@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,50 +15,34 @@
  */
 package org.redisson.reactive;
 
-import java.util.UUID;
-
 import org.redisson.RedissonReadWriteLock;
-import org.redisson.api.RLockAsync;
 import org.redisson.api.RLockReactive;
 import org.redisson.api.RReadWriteLock;
 import org.redisson.api.RReadWriteLockReactive;
-import org.redisson.command.CommandAsyncExecutor;
-import org.redisson.command.CommandReactiveExecutor;
 
 /**
  * 
  * @author Nikita Koksharov
  *
  */
-public class RedissonReadWriteLockReactive extends RedissonExpirableReactive implements RReadWriteLockReactive {
+public class RedissonReadWriteLockReactive implements RReadWriteLockReactive {
 
     private final RReadWriteLock instance;
-    private final UUID id;
-
-    public RedissonReadWriteLockReactive(CommandReactiveExecutor commandExecutor, String name, UUID id) {
-        super(commandExecutor, name);
-        this.id = id;
-        this.instance = new RedissonReadWriteLock(commandExecutor, name, id);
+    private final CommandReactiveExecutor commandExecutor;
+    
+    public RedissonReadWriteLockReactive(CommandReactiveExecutor commandExecutor, String name) {
+        this.commandExecutor = commandExecutor;
+        this.instance = new RedissonReadWriteLock(commandExecutor, name);
     }
 
     @Override
     public RLockReactive readLock() {
-        return new RedissonLockReactive(commandExecutor, getName(), id) {
-            @Override
-            protected RLockAsync createLock(CommandAsyncExecutor connectionManager, String name, UUID id) {
-                return instance.readLock();
-            }
-        };
+        return ReactiveProxyBuilder.create(commandExecutor, instance.readLock(), RLockReactive.class);
     }
 
     @Override
     public RLockReactive writeLock() {
-        return new RedissonLockReactive(commandExecutor, getName(), id) {
-            @Override
-            protected RLockAsync createLock(CommandAsyncExecutor connectionManager, String name, UUID id) {
-                return instance.writeLock();
-            }
-        };
+        return ReactiveProxyBuilder.create(commandExecutor, instance.writeLock(), RLockReactive.class);
     }
 
     

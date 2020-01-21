@@ -2,6 +2,7 @@ package org.redisson;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
 import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Collection;
@@ -13,12 +14,17 @@ import java.util.concurrent.ExecutionException;
 
 import org.junit.Assert;
 import org.junit.Test;
+import org.redisson.ClusterRunner.ClusterProcesses;
+import org.redisson.RedisRunner.FailedToStartRedisException;
 import org.redisson.api.RFuture;
 import org.redisson.api.RList;
 import org.redisson.api.RSet;
+import org.redisson.api.RedissonClient;
 import org.redisson.api.SortOrder;
 import org.redisson.client.codec.IntegerCodec;
 import org.redisson.client.codec.StringCodec;
+import org.redisson.config.Config;
+import org.redisson.connection.balancer.RandomLoadBalancer;
 
 public class RedissonSetTest extends BaseTest {
 
@@ -143,14 +149,128 @@ public class RedissonSetTest extends BaseTest {
         Collection<String> ascSort = list.readSort("test*", Arrays.asList("tester*"), SortOrder.ASC, 1, 2);
         assertThat(ascSort).containsExactly("obj2", "obj3");
     }
-    
+
+    @Test
+    public void testSortOrderAlpha(){
+        RSet<String> set = redisson.getSet("list", StringCodec.INSTANCE);
+        set.add("1");
+        set.add("3");
+        set.add("12");
+
+        assertThat(set.readSortAlpha(SortOrder.ASC))
+                .containsExactly("1", "12", "3");
+        assertThat(set.readSortAlpha(SortOrder.DESC))
+                .containsExactly("3", "12", "1");
+    }
+
+    @Test
+    public void testSortOrderLimitAlpha(){
+        RSet<String> set = redisson.getSet("list", StringCodec.INSTANCE);
+        set.add("1");
+        set.add("3");
+        set.add("12");
+
+        assertThat(set.readSortAlpha(SortOrder.DESC, 0, 2))
+                .containsExactly("3", "12");
+        assertThat(set.readSortAlpha(SortOrder.DESC, 1, 2))
+                .containsExactly("12", "1");
+    }
+
+    @Test
+    public void testSortOrderByPatternAlpha(){
+        RSet<Integer> set = redisson.getSet("list", IntegerCodec.INSTANCE);
+        set.add(1);
+        set.add(2);
+        set.add(3);
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        Collection<Integer> descSort = set
+                .readSortAlpha("test*", SortOrder.DESC);
+        assertThat(descSort).containsExactly(2, 1, 3);
+
+        Collection<Integer> ascSort = set
+                .readSortAlpha("test*", SortOrder.ASC);
+        assertThat(ascSort).containsExactly(3, 1, 2);
+    }
+
+    @Test
+    public void testSortOrderByPatternAlphaLimit(){
+        RSet<Integer> set = redisson.getSet("list", IntegerCodec.INSTANCE);
+        set.add(1);
+        set.add(2);
+        set.add(3);
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        Collection<Integer> descSort = set
+                .readSortAlpha("test*", SortOrder.DESC,1, 2);
+        assertThat(descSort).containsExactly(1, 3);
+
+        Collection<Integer> ascSort = set
+                .readSortAlpha("test*", SortOrder.ASC,1, 2);
+        assertThat(ascSort).containsExactly(1, 2);
+    }
+
+    @Test
+    public void testSortOrderByPatternGetAlpha() {
+        RSet<String> set = redisson.getSet("list", StringCodec.INSTANCE);
+        set.add("1");
+        set.add("2");
+        set.add("3");
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        redisson.getBucket("tester1", StringCodec.INSTANCE).set("obj1");
+        redisson.getBucket("tester2", StringCodec.INSTANCE).set("obj2");
+        redisson.getBucket("tester3", StringCodec.INSTANCE).set("obj3");
+
+        Collection<String> descSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.DESC);
+        assertThat(descSort).containsExactly("obj2", "obj1", "obj3");
+
+        Collection<String> ascSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.ASC);
+        assertThat(ascSort).containsExactly("obj3", "obj1", "obj2");
+    }
+
+    @Test
+    public void testSortOrderByPatternGetAlphaLimit() {
+        RSet<String> set = redisson.getSet("list", StringCodec.INSTANCE);
+        set.add("1");
+        set.add("2");
+        set.add("3");
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        redisson.getBucket("tester1", StringCodec.INSTANCE).set("obj1");
+        redisson.getBucket("tester2", StringCodec.INSTANCE).set("obj2");
+        redisson.getBucket("tester3", StringCodec.INSTANCE).set("obj3");
+
+        Collection<String> descSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.DESC,1,  2);
+        assertThat(descSort).containsExactly("obj1", "obj3");
+
+        Collection<String> ascSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.ASC,1,  2);
+        assertThat(ascSort).containsExactly("obj1", "obj2");
+    }
+
     @Test
     public void testSortTo() {
         RSet<String> list = redisson.getSet("list", IntegerCodec.INSTANCE);
         list.add("1");
         list.add("2");
         list.add("3");
-        
+
         assertThat(list.sortTo("test3", SortOrder.DESC)).isEqualTo(3);
         RList<String> list2 = redisson.getList("test3", StringCodec.INSTANCE);
         assertThat(list2).containsExactly("3", "2", "1");
@@ -227,7 +347,17 @@ public class RedissonSetTest extends BaseTest {
         assertThat(set.removeRandom(4)).isEmpty();
     }
 
-
+    @Test
+    public void testRandomLimited() {
+        RSet<Integer> set = redisson.getSet("simple");
+        for (int i = 0; i < 10; i++) {
+            set.add(i);
+        }
+        
+        assertThat(set.random(3)).containsAnyElementsOf(set.readAll()).hasSize(3);
+    }
+    
+    
     @Test
     public void testRandom() {
         RSet<Integer> set = redisson.getSet("simple");
@@ -374,6 +504,48 @@ public class RedissonSetTest extends BaseTest {
         Assert.assertEquals(2, set.size());
     }
 
+    @Test
+    public void testClusteredIterator() throws FailedToStartRedisException, IOException, InterruptedException {
+        RedisRunner master1 = new RedisRunner().randomPort().randomDir().nosave();
+        RedisRunner master2 = new RedisRunner().randomPort().randomDir().nosave();
+        RedisRunner master3 = new RedisRunner().randomPort().randomDir().nosave();
+        RedisRunner slave1 = new RedisRunner().randomPort().randomDir().nosave();
+        RedisRunner slave2 = new RedisRunner().randomPort().randomDir().nosave();
+        RedisRunner slave3 = new RedisRunner().randomPort().randomDir().nosave();
+        RedisRunner slave4 = new RedisRunner().randomPort().randomDir().nosave();
+        RedisRunner slave5 = new RedisRunner().randomPort().randomDir().nosave();
+        RedisRunner slave6 = new RedisRunner().randomPort().randomDir().nosave();
+        
+        ClusterRunner clusterRunner = new ClusterRunner()
+                .addNode(master1, slave1, slave4)
+                .addNode(master2, slave2, slave5)
+                .addNode(master3, slave3, slave6);
+
+        ClusterProcesses process = clusterRunner.run();
+        
+        Config config = new Config();
+        config.useClusterServers()
+        .setLoadBalancer(new RandomLoadBalancer())
+        .addNodeAddress(process.getNodes().stream().findAny().get().getRedisServerAddressAndPort());
+        RedissonClient redisson = Redisson.create(config);
+        
+        int size = 10000;
+        RSet<String> set = redisson.getSet("test");
+        for (int i = 0; i < size; i++) {
+            set.add("" + i);
+        }
+        
+        Set<String> keys = new HashSet<>();
+        for (String key : set) {
+            keys.add(key);
+        }
+        
+        assertThat(keys).hasSize(size);
+        
+        redisson.shutdown();
+        process.shutdown();
+    }
+    
     @Test
     public void testIteratorRemoveHighVolume() throws InterruptedException {
         Set<Integer> set = redisson.getSet("set") /*new HashSet<Integer>()*/;

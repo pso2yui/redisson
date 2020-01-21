@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,22 +17,121 @@ package org.redisson.api;
 
 import java.util.Iterator;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import org.redisson.api.mapreduce.RCollectionMapReduce;
 
 /**
- * Distributed and concurrent implementation of {@link java.util.Set}
+ * Redis based implementation of {@link java.util.Set}
  *
  * @author Nikita Koksharov
  *
- * @param <V> value
+ * @param <V> type of value
  */
 public interface RSet<V> extends Set<V>, RExpirable, RSetAsync<V>, RSortable<Set<V>> {
 
     /**
-     * Returns values iterator matches <code>pattern</code>. 
+     * Returns <code>RCountDownLatch</code> instance associated with <code>value</code>
      * 
-     * @param pattern for values
+     * @param value - set value
+     * @return RCountDownLatch object
+     */
+    RCountDownLatch getCountDownLatch(V value);
+    
+    /**
+     * Returns <code>RPermitExpirableSemaphore</code> instance associated with <code>value</code>
+     * 
+     * @param value - set value
+     * @return RPermitExpirableSemaphore object
+     */
+    RPermitExpirableSemaphore getPermitExpirableSemaphore(V value);
+
+    /**
+     * Returns <code>RSemaphore</code> instance associated with <code>value</code>
+     * 
+     * @param value - set value
+     * @return RSemaphore object
+     */
+    RSemaphore getSemaphore(V value);
+    
+    /**
+     * Returns <code>RLock</code> instance associated with <code>value</code>
+     * 
+     * @param value - set value
+     * @return RLock object
+     */
+    RLock getFairLock(V value);
+    
+    /**
+     * Returns <code>RReadWriteLock</code> instance associated with <code>value</code>
+     * 
+     * @param value - set value
+     * @return RReadWriteLock object
+     */
+    RReadWriteLock getReadWriteLock(V value);
+    
+    /**
+     * Returns lock instance associated with <code>value</code>
+     * 
+     * @param value - set value
+     * @return RLock object
+     */
+    RLock getLock(V value);
+    
+    /**
+     * Returns stream of elements fetches elements in a batch.
+     * Batch size is defined by <code>count</code> param.
+     * 
+     * @param count - size of elements batch
+     * @return stream of elements
+     */
+    Stream<V> stream(int count);
+    
+    /**
+     * Returns stream of elements fetches elements in a batch.
+     * Batch size is defined by <code>count</code> param.
+     * If pattern is not null then only elements match this pattern are loaded.
+     * 
+     * @param pattern - search pattern
+     * @param count - size of elements batch
+     * @return stream of elements
+     */
+    Stream<V> stream(String pattern, int count);
+    
+    /**
+     * Returns stream of elements.
+     * If pattern is not null then only elements match this pattern are loaded.
+     * 
+     * @param pattern - search pattern
+     * @return stream of elements
+     */
+    Stream<V> stream(String pattern);
+    
+    /**
+     * Returns elements iterator fetches elements in a batch.
+     * Batch size is defined by <code>count</code> param.
+     * 
+     * @param count - size of elements batch
+     * @return iterator
+     */
+    Iterator<V> iterator(int count);
+    
+    /**
+     * Returns elements iterator fetches elements in a batch.
+     * Batch size is defined by <code>count</code> param.
+     * If pattern is not null then only elements match this pattern are loaded.
+     * 
+     * @param pattern - search pattern
+     * @param count - size of elements batch
+     * @return iterator
+     */
+    Iterator<V> iterator(String pattern, int count);
+    
+    /**
+     * Returns elements iterator.
+     * If <code>pattern</code> is not null then only elements match this pattern are loaded.
+     * 
+     * @param pattern - search pattern
      * @return iterator
      */
     Iterator<V> iterator(String pattern);
@@ -47,27 +146,35 @@ public interface RSet<V> extends Set<V>, RExpirable, RSetAsync<V>, RSortable<Set
     <KOut, VOut> RCollectionMapReduce<V, KOut, VOut> mapReduce();
     
     /**
-     * Removes and returns random elements from set
+     * Removes and returns random elements limited by <code>amount</code>
      * 
-     * @param amount of random values
-     * @return random values
+     * @param amount of random elements
+     * @return random elements
      */
     Set<V> removeRandom(int amount);
     
     /**
-     * Removes and returns random element from set
+     * Removes and returns random element
      *
-     * @return value
+     * @return random element
      */
     V removeRandom();
 
     /**
-     * Returns random element from set
+     * Returns random element
      *
-     * @return value
+     * @return random element
      */
     V random();
 
+    /**
+     * Returns random elements from set limited by <code>count</code>
+     *
+     * @param count - values amount to return
+     * @return random elements
+     */
+    Set<V> random(int count);
+    
     /**
      * Move a member from this set to the given destination set in.
      *

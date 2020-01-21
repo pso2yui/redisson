@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,19 +15,15 @@
  */
 package org.redisson.api;
 
-import java.util.concurrent.TimeUnit;
-
 import org.redisson.client.RedisException;
 import org.redisson.client.codec.Codec;
 
 /**
- * Interface for using pipeline feature.
+ * Interface for using Redis pipeline feature.
  * <p>
- * All method invocations on objects
- * from this interface are batched to separate queue and could be executed later
+ * All method invocations on objects got through this interface 
+ * are batched to separate queue and could be executed later
  * with <code>execute()</code> or <code>executeAsync()</code> methods.
- * <p>
- * Please be aware, atomicity <b>is not</b> guaranteed.
  *
  *
  * @author Nikita Koksharov
@@ -35,6 +31,28 @@ import org.redisson.client.codec.Codec;
  */
 public interface RBatch {
 
+    /**
+     * Returns stream instance by <code>name</code>
+     * 
+     * @param <K> type of key
+     * @param <V> type of value
+     * @param name of stream
+     * @return RStream object
+     */
+    <K, V> RStreamAsync<K, V> getStream(String name);
+    
+    /**
+     * Returns stream instance by <code>name</code>
+     * using provided <code>codec</code> for entries.
+     * 
+     * @param <K> type of key
+     * @param <V> type of value
+     * @param name - name of stream
+     * @param codec - codec for entry
+     * @return RStream object
+     */
+    <K, V> RStreamAsync<K, V> getStream(String name, Codec codec);
+    
     /**
      * Returns geospatial items holder instance by <code>name</code>.
      * 
@@ -270,13 +288,12 @@ public interface RBatch {
     /**
      * Returns topic instance by name.
      *
-     * @param <M> type of message
      * @param name - name of object
      * @return Topic object
      */
-    <M> RTopicAsync<M> getTopic(String name);
+    RTopicAsync getTopic(String name);
 
-    <M> RTopicAsync<M> getTopic(String name, Codec codec);
+    RTopicAsync getTopic(String name, Codec codec);
 
     /**
      * Returns queue instance by name.
@@ -359,6 +376,12 @@ public interface RBatch {
      */
     RLexSortedSetAsync getLexSortedSet(String name);
 
+    /**
+     * Returns bitSet instance by name.
+     *
+     * @param name - name of object
+     * @return BitSet object
+     */
     RBitSetAsync getBitSet(String name);
 
     /**
@@ -368,6 +391,14 @@ public interface RBatch {
      */
     RScriptAsync getScript();
 
+    /**
+     * Returns script operations object using provided codec.
+     * 
+     * @param codec - codec for params and result
+     * @return Script object
+     */
+    RScript getScript(Codec codec);
+    
     /**
      * Returns keys operations.
      * Each of Redis/Redisson object associated with own key
@@ -398,80 +429,4 @@ public interface RBatch {
      */
     RFuture<BatchResult<?>> executeAsync();
 
-    /*
-     * Use {@link #skipResult()}
-     */
-    @Deprecated
-    void executeSkipResult();
-
-    /*
-     * Use {@link #skipResult()}
-     */
-    @Deprecated
-    RFuture<Void> executeSkipResultAsync();
-    
-    /**
-     * Inform Redis not to send reply for this batch.
-     * Such approach saves response bandwidth.
-     * <p>
-     * NOTE: Redis 3.2+ required
-     * 
-     * @return self instance
-     */
-    RBatch skipResult();
-    
-    /**
-     * Synchronize write operations execution across defined amount 
-     * of Redis slave nodes within defined timeout.
-     * <p>
-     * NOTE: Redis 3.0+ required
-     * 
-     * @param slaves amount to sync
-     * @param timeout for sync operation
-     * @param unit value
-     * @return self instance
-     */
-    RBatch syncSlaves(int slaves, long timeout, TimeUnit unit);
-    
-    /**
-     * Defines timeout for Redis response. 
-     * Starts to countdown when Redis command has been successfully sent.
-     * <p>
-     * <code>0</code> value means use <code>Config.setTimeout</code> value instead.
-     * <p>
-     * Default is <code>0</code>
-     * 
-     * @param timeout value
-     * @param unit value
-     * @return self instance
-     */
-    RBatch timeout(long timeout, TimeUnit unit);
-
-    /**
-     * Defines time interval for each attempt to send Redis commands batch 
-     * if it hasn't been sent already.
-     * <p>
-     * <code>0</code> value means use <code>Config.setRetryInterval</code> value instead.
-     * <p>
-     * Default is <code>0</code>
-     * 
-     * @param retryInterval value
-     * @param unit value
-     * @return self instance
-     */
-    RBatch retryInterval(long retryInterval, TimeUnit unit);
-
-    /**
-     * Defines attempts amount to re-send Redis commands batch
-     * if it hasn't been sent already.
-     * <p>
-     * <code>0</code> value means use <code>Config.setRetryAttempts</code> value instead.
-     * <p>
-     * Default is <code>0</code>
-     * 
-     * @param retryAttempts value
-     * @return self instance
-     */
-    RBatch retryAttempts(int retryAttempts);
-    
 }

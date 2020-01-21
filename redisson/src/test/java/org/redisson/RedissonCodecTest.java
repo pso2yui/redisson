@@ -16,17 +16,7 @@ import org.redisson.api.RBucket;
 import org.redisson.api.RMap;
 import org.redisson.api.RedissonClient;
 import org.redisson.client.codec.Codec;
-import org.redisson.client.codec.JsonJacksonMapCodec;
-import org.redisson.codec.AvroJacksonCodec;
-import org.redisson.codec.CborJacksonCodec;
-import org.redisson.codec.FstCodec;
-import org.redisson.codec.JsonJacksonCodec;
-import org.redisson.codec.KryoCodec;
-import org.redisson.codec.LZ4Codec;
-import org.redisson.codec.MsgPackJacksonCodec;
-import org.redisson.codec.SerializationCodec;
-import org.redisson.codec.SmileJacksonCodec;
-import org.redisson.codec.SnappyCodec;
+import org.redisson.codec.*;
 import org.redisson.config.Config;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -44,9 +34,10 @@ public class RedissonCodecTest extends BaseTest {
     private Codec cborCodec = new CborJacksonCodec();
     private Codec fstCodec = new FstCodec();
     private Codec snappyCodec = new SnappyCodec();
-    private Codec msgPackCodec = new MsgPackJacksonCodec();
+    private Codec snappyCodecV2 = new SnappyCodecV2();
+//    private Codec msgPackCodec = new MsgPackJacksonCodec();
     private Codec lz4Codec = new LZ4Codec();
-    private Codec jsonListOfStringCodec = new JsonJacksonMapCodec(
+    private Codec jsonListOfStringCodec = new TypedJsonJacksonCodec(
                     new TypeReference<String>() {}, new TypeReference<List<String>>() {});
 
     @Test
@@ -67,14 +58,14 @@ public class RedissonCodecTest extends BaseTest {
         test(redisson);
     }
     
-    @Test
-    public void testMsgPack() {
-        Config config = createConfig();
-        config.setCodec(msgPackCodec);
-        RedissonClient redisson = Redisson.create(config);
-
-        test(redisson);
-    }
+//    @Test
+//    public void testMsgPack() {
+//        Config config = createConfig();
+//        config.setCodec(msgPackCodec);
+//        RedissonClient redisson = Redisson.create(config);
+//
+//        test(redisson);
+//    }
     
     @Test
     public void testSmile() {
@@ -127,6 +118,25 @@ public class RedissonCodecTest extends BaseTest {
 
         test(redisson);
     }
+    
+    @Test
+    public void testSnappyV2() {
+        Config config = createConfig();
+        config.setCodec(snappyCodecV2);
+        RedissonClient redisson = Redisson.create(config);
+
+        test(redisson);
+    }
+    
+    @Test
+    public void testSnappyBigV2() throws IOException {
+        Codec sc = new SnappyCodecV2();
+        String randomData = RandomString.make(Short.MAX_VALUE*2 + 142);
+        ByteBuf g = sc.getValueEncoder().encode(randomData);
+        String decompressedData = (String) sc.getValueDecoder().decode(g, null);
+        assertThat(decompressedData).isEqualTo(randomData);
+    }
+
 
     @Test
     public void testJson() {

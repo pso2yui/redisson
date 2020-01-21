@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,10 +19,13 @@ import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Map.Entry;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 import org.redisson.api.RExecutorService;
 import org.redisson.api.RFuture;
 import org.redisson.api.RedissonClient;
+import org.redisson.api.WorkerOptions;
 import org.redisson.client.RedisConnection;
 import org.redisson.config.RedissonNodeConfig;
 import org.redisson.connection.ConnectionManager;
@@ -31,14 +34,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.netty.buffer.ByteBufUtil;
-import io.netty.util.internal.ThreadLocalRandom;
 
 /**
  * 
  * @author Nikita Koksharov
  *
  */
-public class RedissonNode {
+public final class RedissonNode {
 
     private static final Logger log = LoggerFactory.getLogger(RedissonNode.class);
     
@@ -74,7 +76,6 @@ public class RedissonNode {
     
     private String generateId() {
         byte[] id = new byte[8];
-        // TODO JDK UPGRADE replace to native ThreadLocalRandom
         ThreadLocalRandom.current().nextBytes(id);
         return ByteBufUtil.hexDump(id);
     }
@@ -115,7 +116,7 @@ public class RedissonNode {
      */
     public void shutdown() {
         if (hasRedissonInstance) {
-            redisson.shutdown();
+            redisson.shutdown(0, 15, TimeUnit.MINUTES);
             log.info("Redisson node has been shutdown successfully");
         }
     }
@@ -128,7 +129,7 @@ public class RedissonNode {
             redisson = Redisson.create(config);
         }
         
-        retrieveAdresses();
+        retrieveAddresses();
         
         if (config.getRedissonNodeInitializer() != null) {
             config.getRedissonNodeInitializer().onStartup(this);
@@ -139,25 +140,35 @@ public class RedissonNode {
             if (mapReduceWorkers == 0) {
                 mapReduceWorkers = Runtime.getRuntime().availableProcessors();
             }
-            redisson.getExecutorService(RExecutorService.MAPREDUCE_NAME).registerWorkers(mapReduceWorkers);
+            
+            WorkerOptions options = WorkerOptions.defaults()
+                                                .workers(mapReduceWorkers)
+                                                .beanFactory(config.getBeanFactory());
+            
+            redisson.getExecutorService(RExecutorService.MAPREDUCE_NAME).registerWorkers(options);
             log.info("{} map reduce worker(s) registered", mapReduceWorkers);
         }
         
         for (Entry<String, Integer> entry : config.getExecutorServiceWorkers().entrySet()) {
             String name = entry.getKey();
             int workers = entry.getValue();
-            redisson.getExecutorService(name).registerWorkers(workers);
-            log.info("{} worker(s) for '{}' ExecutorService registered", workers, name);
+            
+            WorkerOptions options = WorkerOptions.defaults()
+                                                .workers(workers)
+                                                .beanFactory(config.getBeanFactory());
+            
+            redisson.getExecutorService(name).registerWorkers(options);
+            log.info("{} worker(s) registered for ExecutorService with '{}' name", workers, name);
         }
 
         log.info("Redisson node started!");
     }
 
-    private void retrieveAdresses() {
-        ConnectionManager connectionManager = ((Redisson)redisson).getConnectionManager();
+    private void retrieveAddresses() {
+        ConnectionManager connectionManager = ((Redisson) redisson).getConnectionManager();
         for (MasterSlaveEntry entry : connectionManager.getEntrySet()) {
             RFuture<RedisConnection> readFuture = entry.connectionReadOp(null);
-            if (readFuture.awaitUninterruptibly((long)connectionManager.getConfig().getConnectTimeout()) 
+            if (readFuture.awaitUninterruptibly((long) connectionManager.getConfig().getConnectTimeout()) 
                     && readFuture.isSuccess()) {
                 RedisConnection connection = readFuture.getNow();
                 entry.releaseRead(connection);
@@ -166,7 +177,7 @@ public class RedissonNode {
                 return;
             }
             RFuture<RedisConnection> writeFuture = entry.connectionWriteOp(null);
-            if (writeFuture.awaitUninterruptibly((long)connectionManager.getConfig().getConnectTimeout())
+            if (writeFuture.awaitUninterruptibly((long) connectionManager.getConfig().getConnectTimeout())
                     && writeFuture.isSuccess()) {
                 RedisConnection connection = writeFuture.getNow();
                 entry.releaseWrite(connection);

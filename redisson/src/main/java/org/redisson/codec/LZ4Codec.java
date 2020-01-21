@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package org.redisson.codec;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
+import org.redisson.client.codec.BaseCodec;
 import org.redisson.client.codec.Codec;
 import org.redisson.client.handler.State;
 import org.redisson.client.protocol.Decoder;
@@ -41,7 +42,7 @@ import net.jpountz.lz4.LZ4SafeDecompressor;
  * @author Nikita Koksharov
  *
  */
-public class LZ4Codec implements Codec {
+public class LZ4Codec extends BaseCodec {
 
     private static final int DECOMPRESSION_HEADER_SIZE = Integer.SIZE / 8;
     private final LZ4Factory factory = LZ4Factory.fastestInstance();
@@ -60,6 +61,10 @@ public class LZ4Codec implements Codec {
         this(new FstCodec(classLoader));
     }
 
+    public LZ4Codec(ClassLoader classLoader, LZ4Codec codec) throws ReflectiveOperationException {
+        this(copy(classLoader, codec.innerCodec));
+    }
+    
     private final Decoder<Object> decoder = new Decoder<Object>() {
         @Override
         public Object decode(ByteBuf buf, State state) throws IOException {
@@ -107,26 +112,6 @@ public class LZ4Codec implements Codec {
             }
         }
     };
-
-    @Override
-    public Decoder<Object> getMapValueDecoder() {
-        return getValueDecoder();
-    }
-
-    @Override
-    public Encoder getMapValueEncoder() {
-        return getValueEncoder();
-    }
-
-    @Override
-    public Decoder<Object> getMapKeyDecoder() {
-        return getValueDecoder();
-    }
-
-    @Override
-    public Encoder getMapKeyEncoder() {
-        return getValueEncoder();
-    }
 
     @Override
     public Decoder<Object> getValueDecoder() {

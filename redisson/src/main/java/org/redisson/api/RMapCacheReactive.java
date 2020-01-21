@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Nikita Koksharov
+ * Copyright (c) 2013-2020 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ package org.redisson.api;
 
 import java.util.concurrent.TimeUnit;
 
-import org.reactivestreams.Publisher;
+import reactor.core.publisher.Mono;
 
 /**
  * <p>Map-based cache with ability to set TTL for each entry via
@@ -38,8 +38,26 @@ import org.reactivestreams.Publisher;
  * @param <K> key
  * @param <V> value
  */
-public interface RMapCacheReactive<K, V> extends RMapReactive<K, V> {
+public interface RMapCacheReactive<K, V> extends RMapReactive<K, V>, RDestroyable {
 
+    /**
+     * Sets max size of the map.
+     * Superfluous elements are evicted using LRU algorithm.
+     * 
+     * @param maxSize - max size
+     * @return void
+     */
+    Mono<Void> setMaxSize(int maxSize);
+    
+    /**
+     * Tries to set max size of the map. 
+     * Superfluous elements are evicted using LRU algorithm. 
+     *
+     * @param maxSize - max size
+     * @return <code>true</code> if max size has been successfully set, otherwise <code>false</code>.
+     */
+    Mono<Boolean> trySetMaxSize(int maxSize);
+    
     /**
      * If the specified key is not already associated
      * with a value, associate it with the given value.
@@ -56,7 +74,7 @@ public interface RMapCacheReactive<K, V> extends RMapReactive<K, V> {
      * @param unit - time unit
      * @return previous associated value
      */
-    Publisher<V> putIfAbsent(K key, V value, long ttl, TimeUnit unit);
+    Mono<V> putIfAbsent(K key, V value, long ttl, TimeUnit unit);
 
     /**
      * If the specified key is not already associated
@@ -82,7 +100,7 @@ public interface RMapCacheReactive<K, V> extends RMapReactive<K, V> {
      *
      * @return previous associated value
      */
-    Publisher<V> putIfAbsent(K key, V value, long ttl, TimeUnit ttlUnit, long maxIdleTime, TimeUnit maxIdleUnit);
+    Mono<V> putIfAbsent(K key, V value, long ttl, TimeUnit ttlUnit, long maxIdleTime, TimeUnit maxIdleUnit);
 
     /**
      * Stores value mapped by key with specified time to live.
@@ -97,7 +115,7 @@ public interface RMapCacheReactive<K, V> extends RMapReactive<K, V> {
      * @param unit - time unit
      * @return previous associated value
      */
-    Publisher<V> put(K key, V value, long ttl, TimeUnit unit);
+    Mono<V> put(K key, V value, long ttl, TimeUnit unit);
 
     /**
      * Stores value mapped by key with specified time to live and max idle time.
@@ -120,7 +138,7 @@ public interface RMapCacheReactive<K, V> extends RMapReactive<K, V> {
      *
      * @return previous associated value
      */
-    Publisher<V> put(K key, V value, long ttl, TimeUnit ttlUnit, long maxIdleTime, TimeUnit maxIdleUnit);
+    Mono<V> put(K key, V value, long ttl, TimeUnit ttlUnit, long maxIdleTime, TimeUnit maxIdleUnit);
 
     /**
      * Stores value mapped by key with specified time to live.
@@ -141,7 +159,7 @@ public interface RMapCacheReactive<K, V> extends RMapReactive<K, V> {
      * @return <code>true</code> if key is a new key in the hash and value was set.
      *         <code>false</code> if key already exists in the hash and the value was updated.
      */
-    Publisher<Boolean> fastPut(K key, V value, long ttl, TimeUnit unit);
+    Mono<Boolean> fastPut(K key, V value, long ttl, TimeUnit unit);
 
     /**
      * Stores value mapped by key with specified time to live and max idle time.
@@ -168,7 +186,7 @@ public interface RMapCacheReactive<K, V> extends RMapReactive<K, V> {
      * @return <code>true</code> if key is a new key in the hash and value was set.
      *         <code>false</code> if key already exists in the hash and the value was updated.
      */
-    Publisher<Boolean> fastPut(K key, V value, long ttl, TimeUnit ttlUnit, long maxIdleTime, TimeUnit maxIdleUnit);
+    Mono<Boolean> fastPut(K key, V value, long ttl, TimeUnit ttlUnit, long maxIdleTime, TimeUnit maxIdleUnit);
     
     /**
      * If the specified key is not already associated
@@ -195,7 +213,7 @@ public interface RMapCacheReactive<K, V> extends RMapReactive<K, V> {
      * @return <code>true</code> if key is a new key in the hash and value was set.
      *         <code>false</code> if key already exists in the hash
      */
-    Publisher<Boolean> fastPutIfAbsent(K key, V value, long ttl, TimeUnit ttlUnit, long maxIdleTime, TimeUnit maxIdleUnit);
+    Mono<Boolean> fastPutIfAbsent(K key, V value, long ttl, TimeUnit ttlUnit, long maxIdleTime, TimeUnit maxIdleUnit);
 
     /**
      * Returns the number of entries in cache.
@@ -204,6 +222,16 @@ public interface RMapCacheReactive<K, V> extends RMapReactive<K, V> {
      *
      */
     @Override
-    Publisher<Integer> size();
+    Mono<Integer> size();
+    
+    /**
+     * Remaining time to live of map entry associated with a <code>key</code>. 
+     *
+     * @param key - map key
+     * @return time in milliseconds
+     *          -2 if the key does not exist.
+     *          -1 if the key exists but has no associated expire.
+     */
+    Mono<Long> remainTimeToLive(K key);
 
 }

@@ -14,6 +14,24 @@ import org.redisson.client.RedisException;
 public class RedissonPermitExpirableSemaphoreTest extends BaseConcurrentTest {
 
     @Test
+    public void testUpdateLeaseTime() throws InterruptedException {
+        RPermitExpirableSemaphore semaphore = redisson.getPermitExpirableSemaphore("test");
+        semaphore.trySetPermits(1);
+        assertThat(semaphore.updateLeaseTime("123", 1, TimeUnit.SECONDS)).isFalse();
+        String id = semaphore.acquire();
+        assertThat(semaphore.updateLeaseTime(id, 1, TimeUnit.SECONDS)).isTrue();
+        Thread.sleep(1200);
+        assertThat(semaphore.updateLeaseTime(id, 1, TimeUnit.SECONDS)).isFalse();
+        String id2 = semaphore.tryAcquire(1, 1, TimeUnit.SECONDS);
+        assertThat(semaphore.updateLeaseTime(id2, 3, TimeUnit.SECONDS)).isTrue();
+        Thread.sleep(2800);
+        assertThat(semaphore.availablePermits()).isZero();
+        Thread.sleep(500);
+        assertThat(semaphore.availablePermits()).isOne();
+        assertThat(semaphore.updateLeaseTime(id2, 2, TimeUnit.SECONDS)).isFalse();
+    }
+    
+    @Test
     public void testNotExistent() {
         RPermitExpirableSemaphore semaphore = redisson.getPermitExpirableSemaphore("testSemaphoreForNPE");
         Assert.assertEquals(0, semaphore.availablePermits());        
@@ -37,7 +55,17 @@ public class RedissonPermitExpirableSemaphoreTest extends BaseConcurrentTest {
         Thread.sleep(1100);
         Assert.assertEquals(2, semaphore.availablePermits());
     }
-    
+
+    @Test
+    public void testExpiration() throws InterruptedException {
+        RPermitExpirableSemaphore semaphore = redisson.getPermitExpirableSemaphore("some-key");
+        semaphore.trySetPermits(1);
+        semaphore.expire(3, TimeUnit.SECONDS);
+        semaphore.tryAcquire(1, 1, TimeUnit.SECONDS);
+        Thread.sleep(4000);
+        assertThat(redisson.getKeys().count()).isZero();
+    }
+
     @Test
     public void testExpire() throws InterruptedException {
         RPermitExpirableSemaphore s = redisson.getPermitExpirableSemaphore("test");
